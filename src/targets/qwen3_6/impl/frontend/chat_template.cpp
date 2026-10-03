@@ -27,6 +27,23 @@ constexpr Sha256Digest kReasoningEffortTemplateDigest{
     0xd3, 0xe2, 0xa7, 0x25, 0xb6, 0xc2, 0x58, 0x6a, 0xaa, 0x3a, 0x8a, 0xf9, 0xd7, 0xa8, 0x10, 0x41,
 };
 
+// The NInfer v3 artifact's annotated Jinja transcription of the ReasoningEffort renderer below:
+// positional system/developer turns, final-assistant continuation, and tool-result histories.
+constexpr Sha256Digest kNInferReasoningEffortTemplateDigest{
+    0xa4, 0x97, 0xdb, 0x9e, 0x66, 0x39, 0x41, 0xe6, 0xf7, 0xa0, 0x53, 0x07, 0xc2, 0xba, 0xfa, 0x83,
+    0x74, 0xc1, 0x2e, 0x14, 0x2a, 0xd1, 0xfb, 0xea, 0x62, 0x29, 0x88, 0x8d, 0x41, 0xf1, 0xab, 0x16,
+};
+
+std::optional<ChatTemplateSemantics> known_semantics(std::string_view source) {
+    const Sha256Digest digest = sha256(source);
+    if (digest == kThinkingToggleTemplateDigest) { return ChatTemplateSemantics::ThinkingToggle; }
+    if (digest == kReasoningEffortTemplateDigest ||
+        digest == kNInferReasoningEffortTemplateDigest) {
+        return ChatTemplateSemantics::ReasoningEffort;
+    }
+    return std::nullopt;
+}
+
 constexpr std::string_view kLowReasoningInstructions =
     "Reasoning effort is set to low. Keep your thinking brief and focused, moving directly to "
     "the conclusion without unnecessary elaboration.";
@@ -412,15 +429,14 @@ RenderedFragment ChatMessage::rendered_content(bool add_vision_id, int* image_co
 }
 
 CompiledChatTemplate CompiledChatTemplate::resolve(std::string_view source) {
-    const Sha256Digest digest = sha256(source);
-    if (digest == kThinkingToggleTemplateDigest) {
-        return CompiledChatTemplate(ChatTemplateSemantics::ThinkingToggle);
-    }
-    if (digest == kReasoningEffortTemplateDigest) {
-        return CompiledChatTemplate(ChatTemplateSemantics::ReasoningEffort);
-    }
+    if (const auto semantics = known_semantics(source)) { return CompiledChatTemplate(*semantics); }
     throw std::invalid_argument("unsupported frontend/chat_template.jinja (sha256 " +
-                                sha256_hex(digest) + ")");
+                                sha256_hex(sha256(source)) + ")");
+}
+
+bool CompiledChatTemplate::same_renderer(std::string_view a, std::string_view b) {
+    const auto semantics = known_semantics(a);
+    return semantics.has_value() && semantics == known_semantics(b);
 }
 
 PromptCapabilities CompiledChatTemplate::capabilities() const noexcept {

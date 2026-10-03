@@ -218,8 +218,11 @@ void validate_tokenizer_config(const FrontendResources& resources) {
         throw std::invalid_argument(
             "tokenizer_config.json.chat_template must contain the loaded chat template");
     }
-    if (tokenizer_config.at("chat_template").get_ref<const std::string&>() !=
-        resources.chat_template_jinja) {
+    // v3 artifacts pair NInfer's annotated chat_template.jinja with the official template kept in
+    // tokenizer_config.json; both must then select the same compiled renderer.
+    const auto& config_template = tokenizer_config.at("chat_template").get_ref<const std::string&>();
+    if (config_template != resources.chat_template_jinja &&
+        !fi::CompiledChatTemplate::same_renderer(config_template, resources.chat_template_jinja)) {
         throw std::invalid_argument(
             "tokenizer_config.json.chat_template does not match frontend/chat_template.jinja");
     }
