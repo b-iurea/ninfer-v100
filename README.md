@@ -292,6 +292,33 @@ used by active requests and retained prefixes; `auto` resolves the largest legal
 startup from the memory remaining after weights while keeping 1 GiB of sizing headroom. Explicit
 capacities remain fixed for the process lifetime.
 
+## Improvements in this fork
+
+On top of upstream, the `v3-artifact-support` branch adds:
+
+- **NInfer v3 artifacts.** The reader parses the v3 directory (objects by opaque id, logical names
+  through bindings) and translates it into the v2 names the targets already use, so binders and
+  kernels are unchanged and a v3 `.ninfer` loads without converting it to a second file. The
+  annotated `chat_template.jinja` that v3 ships is accepted next to the official template when both
+  select the same renderer, with reasoning-effort semantics.
+- **FP16 activation staging for Volta QPN projections.** The FP8 and NVFP4 QPN paths convert the BF16
+  activation to FP16 once per chunk into workspace instead of inside every CTA and warp, with the
+  same values (MLP down shape N=5120, K=17408, T=1..4: 140 → 82 µs per call). NVFP4 `linear_add`
+  also adds the FP32 projection into the BF16 residual with a single rounding, as FP8 does.
+- **Capabilities in `/v1/models`.** Each model object carries `architecture.input_modalities`
+  (`image` and `video` with `--vision`) and `meta.ninfer.reasoning` (`thinking`, and the
+  `reasoning_effort` levels the loaded template accepts), so clients such as
+  [pi-magi-theme](https://github.com/b-iurea/pi-magi-theme) configure thinking and image input
+  without hand-written overrides.
+- **Prometheus `GET /metrics`.** llama-swap's metric names under the `ninfer_` prefix: GPU
+  utilization, VRAM, temperature and power through NVML (loaded at runtime, so no new link
+  dependency), host memory, running requests, and the last completed request's token counts,
+  prompt and decode tok/s, prefix-cache hits and MTP draft acceptance.
+- **`thinking_budget_tokens` on Chat Completions.** The llama.cpp field caps one request's
+  thinking, the per-request counterpart of `--default-thinking-budget`.
+
+Details are in [HTTP serving](docs/serving.md#endpoints).
+
 ## Documentation
 
 - [Documentation index](docs/README.md)
