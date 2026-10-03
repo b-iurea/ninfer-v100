@@ -12,21 +12,7 @@ namespace {
 using S = Fp8VoltaQpnSchedule;
 static_assert(kFp8VoltaQpnRowsPerTile == S::kRowsPerTile,
               "dispatch mirrors the tile height for host code");
-
-__global__ void fp8_stage_bf16_activation_kernel(const __nv_bfloat16* __restrict__ input,
-                                                 half* __restrict__ output,
-                                                 std::int64_t count) {
-    const std::int64_t i = static_cast<std::int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if (i < count) { output[i] = __float2half(__bfloat162float(input[i])); }
-}
 } // namespace
-
-void fp8_stage_bf16_activation_sm70(const Tensor& x, void* fp16_out, cudaStream_t stream) {
-    const std::int64_t count = x.numel();
-    fp8_stage_bf16_activation_kernel<<<static_cast<int>((count + 255) / 256), 256, 0, stream>>>(
-        static_cast<const __nv_bfloat16*>(x.data), static_cast<half*>(fp16_out), count);
-    CUDA_CHECK(cudaGetLastError());
-}
 
 bool fp8_volta_qpn_supported(std::int32_t n, std::int32_t k, std::int32_t t) noexcept {
     if (n <= 0 || t <= 0) { return false; }

@@ -1,10 +1,39 @@
-# NInfer
+# NInfer V100 Turbo
 
-> Up to 219 decode tok/s from Qwen 3.8 27B on a single V100.  With software NVFP4 on Volta.
+> Up to **260 decode tok/s** from Qwen 3.8 27B on a single V100, **+18% over upstream** (220 tok/s on the same card and benchmark). With software NVFP4 on Volta.
 
 NInfer is a from-scratch C++/CUDA inference engine optimized for selected Qwen checkpoints on NVIDIA Tesla V100.
 
 It supports text, image, and video input through a local CLI or OpenAI-/Anthropic-compatible HTTP APIs. The runtime is intentionally narrow: one GPU, one resident model, 1–8 active requests.
+
+## Improvements in this fork
+
+On top of upstream [geoffwatts/ninfer-v100](https://github.com/geoffwatts/ninfer-v100), this fork adds:
+
+- **NInfer v3 artifacts.** The reader parses the v3 directory (objects by opaque id, logical names
+  through bindings) and translates it into the v2 names the targets already use, so binders and
+  kernels are unchanged and a v3 `.ninfer` loads without converting it to a second file. The
+  annotated `chat_template.jinja` that v3 ships is accepted next to the official template when both
+  select the same renderer, with reasoning-effort semantics.
+- **FP16 activation staging for Volta QPN projections.** The FP8 and NVFP4 QPN paths convert the BF16
+  activation to FP16 once per chunk into workspace instead of inside every CTA and warp, with the
+  same values (MLP down shape N=5120, K=17408, T=1..4: 140 → 82 µs per call). End to end this is
+  **+18% decode** on Qwen3.8-27B NVFP4: 220.12 → 259.99 tok/s with MTP K=1, 29.43 → 34.31 tok/s
+  without speculation, prefill unchanged ([A/B](docs/v100.md#fp16-activation-staging-ab)). NVFP4 `linear_add`
+  also adds the FP32 projection into the BF16 residual with a single rounding, as FP8 does.
+- **Capabilities in `/v1/models`.** Each model object carries `architecture.input_modalities`
+  (`image` and `video` with `--vision`) and `meta.ninfer.reasoning` (`thinking`, and the
+  `reasoning_effort` levels the loaded template accepts), so clients such as
+  [pi-magi-theme](https://github.com/b-iurea/pi-magi-theme) configure thinking and image input
+  without hand-written overrides.
+- **Prometheus `GET /metrics`.** llama-swap's metric names under the `ninfer_` prefix: GPU
+  utilization, VRAM, temperature and power through NVML (loaded at runtime, so no new link
+  dependency), host memory, running requests, and the last completed request's token counts,
+  prompt and decode tok/s, prefix-cache hits and MTP draft acceptance.
+- **`thinking_budget_tokens` on Chat Completions.** The llama.cpp field caps one request's
+  thinking, the per-request counterpart of `--default-thinking-budget`.
+
+Details are in [HTTP serving](docs/serving.md#endpoints).
 
 ## Models
 
@@ -20,7 +49,7 @@ Artifacts contain the exact model weights, tokenizer, chat template, and require
 
 ## Performance
 
-Qwen3.8-27B NVFP4 reaches **218.98 decode tok/s** at K=1, with 99.2% MTP draft acceptance.
+Qwen3.8-27B NVFP4 reaches **259.99 decode tok/s** at K=1, with 99.2% MTP draft acceptance (upstream: 218.98 on the same benchmark).
 That result is on a V100-PCIe-32GB, not SXM. The equivalent SXM2 card is roughly 7% faster; decode is predominantly HBM-bound, so PCIe bandwidth and host performance have little effect.
 
 ### Tesla V100: software NVFP4 and groupwise inference

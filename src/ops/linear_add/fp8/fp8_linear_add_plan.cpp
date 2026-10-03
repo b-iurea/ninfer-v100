@@ -6,6 +6,7 @@
 #include "ops/linear/fp8/fp8_a8_plan.h"
 #include "ops/linear/fp8/fp8_config.h"
 #ifdef NINFER_VOLTA_BUILD
+#include "ops/common/stage_fp16_volta.h"
 #include "ops/linear/fp8/fp8_cutlass_sm70.h"
 #endif
 
@@ -74,10 +75,24 @@ Tensor allocate_projected(Allocator& allocator, std::int32_t output_rows, std::i
     return allocator.alloc(DType::BF16, {output_rows, tokens}, 256);
 }
 
+std::size_t staged_activation_bytes(std::int32_t input_rows, std::int32_t tokens) {
+    return static_cast<std::size_t>(input_rows) * tokens * sizeof(std::uint16_t);
+}
+
 void launch_qpn_residual(const Tensor& x, const Weight& weight, Tensor& residual,
                          WorkspaceArena& workspace, cudaStream_t stream) {
     if (x.ne[1] <= 32) {
-        fp8_linear_add_qpn_launch(x, weight, residual, stream);
+        // Stage the activation as FP16 once rather than converting it inside every CTA; a
+        // workspace without room keeps the in-kernel conversion, which yields the same values.
+        const std::size_t bytes = staged_activation_bytes(weight.k, x.ne[1]);
+        if (workspace.capacity() - workspace.used() < bytes) {
+            fp8_linear_add_qpn_launch(x, weight, nullptr, residual, stream);
+            return;
+        }
+        auto scope              = workspace.scope();
+        const DeviceSpan staged = workspace.alloc_bytes(bytes, 256);
+        stage_bf16_as_fp16_sm70(x, staged.data, stream);
+        fp8_linear_add_qpn_launch(x, weight, staged.data, residual, stream);
         return;
     }
     auto scope       = workspace.scope();
@@ -89,7 +104,10 @@ void launch_qpn_residual(const Tensor& x, const Weight& weight, Tensor& residual
 std::size_t qpn_residual_workspace_bytes(std::int32_t output_rows, std::int32_t input_rows,
                                          std::int32_t tokens) {
     WorkspaceLayoutBuilder layout;
-    if (tokens <= 32) { return 0; }
+    if (tokens <= 32) {
+        (void)layout.alloc_bytes(staged_activation_bytes(input_rows, tokens), 256);
+        return layout.peak_bytes(1);
+    }
     (void)allocate_projected(layout, output_rows, tokens);
     const std::size_t linear_bytes =
         fp8_cutlass_sm70_workspace_bytes(output_rows, input_rows, tokens);

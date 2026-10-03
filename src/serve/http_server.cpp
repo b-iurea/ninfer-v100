@@ -7,7 +7,11 @@
 
 #include <nlohmann/json.hpp>
 
+#include <dlfcn.h>
+
 #include <chrono>
+#include <fstream>
+#include <sstream>
 #include <exception>
 #include <mutex>
 #include <stdexcept>
@@ -17,6 +21,102 @@
 
 namespace ninfer::serve {
 namespace {
+
+// GPU stats through NVML, loaded at runtime: the driver ships libnvidia-ml, so a missing library
+// (no driver utilities in a container) only drops the GPU lines instead of failing the build or start.
+// Only the stable v1/v2 entry points used by nvidia-smi are declared.
+struct Nvml {
+    using Device = void*;
+    struct Utilization {
+        unsigned int gpu;
+        unsigned int memory;
+    };
+    struct Memory {
+        unsigned long long total;
+        unsigned long long free;
+        unsigned long long used;
+    };
+    int (*device_count)(unsigned int*)                      = nullptr;
+    int (*device_handle)(unsigned int, Device*)             = nullptr;
+    int (*name)(Device, char*, unsigned int)                = nullptr;
+    int (*utilization)(Device, Utilization*)                = nullptr;
+    int (*memory)(Device, Memory*)                          = nullptr;
+    int (*temperature)(Device, int, unsigned int*)          = nullptr;
+    int (*power)(Device, unsigned int*)                     = nullptr;
+    bool ok                                                 = false;
+
+    Nvml() {
+        void* lib = dlopen("libnvidia-ml.so.1", RTLD_NOW | RTLD_LOCAL);
+        if (lib == nullptr) { return; }
+        auto init = reinterpret_cast<int (*)()>(dlsym(lib, "nvmlInit_v2"));
+        load(lib, device_count, "nvmlDeviceGetCount_v2");
+        load(lib, device_handle, "nvmlDeviceGetHandleByIndex_v2");
+        load(lib, name, "nvmlDeviceGetName");
+        load(lib, utilization, "nvmlDeviceGetUtilizationRates");
+        load(lib, memory, "nvmlDeviceGetMemoryInfo");
+        load(lib, temperature, "nvmlDeviceGetTemperature");
+        load(lib, power, "nvmlDeviceGetPowerUsage");
+        ok = init != nullptr && init() == 0 && device_count && device_handle && name &&
+             utilization && memory && temperature && power;
+    }
+
+    template <typename F> static void load(void* lib, F& fn, const char* symbol) {
+        fn = reinterpret_cast<F>(dlsym(lib, symbol));
+    }
+};
+
+std::string prometheus_label(std::string value) {
+    std::string out;
+    for (const char c : value) {
+        if (c == '"' || c == '\\') { out += '\\'; }
+        if (c != '\n') { out += c; }
+    }
+    return out;
+}
+
+// llama-swap-compatible metric names under the ninfer_ prefix, so dashboards read both alike.
+void append_host_metrics(std::ostringstream& out) {
+    static const Nvml nvml;
+    unsigned int count = 0;
+    if (nvml.ok && nvml.device_count(&count) == 0) {
+        for (unsigned int i = 0; i < count; ++i) {
+            Nvml::Device device = nullptr;
+            if (nvml.device_handle(i, &device) != 0) { continue; }
+            char name[96]           = "GPU";
+            Nvml::Utilization util  = {};
+            Nvml::Memory memory     = {};
+            unsigned int temp       = 0;
+            unsigned int milliwatts = 0;
+            (void)nvml.name(device, name, sizeof(name));
+            (void)nvml.utilization(device, &util);
+            (void)nvml.memory(device, &memory);
+            (void)nvml.temperature(device, 0, &temp); // NVML_TEMPERATURE_GPU
+            (void)nvml.power(device, &milliwatts);
+            const std::string labels =
+                "{id=\"" + std::to_string(i) + "\",name=\"" + prometheus_label(name) + "\"}";
+            out << "ninfer_gpu_util_percent" << labels << ' ' << util.gpu << '\n'
+                << "ninfer_gpu_memory_used_bytes" << labels << ' ' << memory.used << '\n'
+                << "ninfer_gpu_memory_total_bytes" << labels << ' ' << memory.total << '\n'
+                << "ninfer_gpu_temperature_celsius" << labels << ' ' << temp << '\n'
+                << "ninfer_gpu_power_draw_watts" << labels << ' ' << milliwatts / 1000.0 << '\n';
+        }
+    }
+    std::ifstream meminfo("/proc/meminfo");
+    std::string key;
+    unsigned long long kib = 0;
+    unsigned long long total = 0;
+    unsigned long long available = 0;
+    std::string unit;
+    while (meminfo >> key >> kib) {
+        std::getline(meminfo, unit);
+        if (key == "MemTotal:") { total = kib * 1024; }
+        if (key == "MemAvailable:") { available = kib * 1024; }
+    }
+    if (total != 0) {
+        out << "ninfer_memory_used_bytes " << total - available << '\n'
+            << "ninfer_memory_total_bytes " << total << '\n';
+    }
+}
 
 void write_exception(httplib::Response& res, const std::exception& ex) {
     ApiError error;
@@ -267,6 +367,25 @@ void HttpServer::record_request_rejected(const RequestRejectionLogContext& conte
 
 void HttpServer::record_request_done(const RequestLogContext& context,
                                      const GenerationOutcome& outcome) {
+    {
+        const GenerationMetrics& m = outcome.metrics;
+        const int computed = std::max(0, outcome.prompt_tokens -
+                                             static_cast<int>(m.prefix_cache_hit_tokens));
+        const int decoded  = std::max(0, outcome.completion_tokens - 1);
+        std::lock_guard lock(last_request_mutex_);
+        last_request_ = LastRequest{
+            .completed         = last_request_.completed + 1,
+            .prompt_tokens     = outcome.prompt_tokens,
+            .cache_tokens      = m.prefix_cache_hit_tokens,
+            .completion_tokens = outcome.completion_tokens,
+            .prompt_per_second =
+                m.prompt_wall_seconds > 0.0 ? computed / m.prompt_wall_seconds : 0.0,
+            .tokens_per_second =
+                m.generation_wall_seconds > 0.0 ? decoded / m.generation_wall_seconds : 0.0,
+            .draft_tokens    = m.speculative_draft_tokens,
+            .accepted_tokens = m.speculative_accepted_tokens,
+        };
+    }
     request_jsonl_.write_request_done(context, outcome);
     operational_log_.request_done(context, outcome);
 }
@@ -431,6 +550,9 @@ void HttpServer::register_routes() {
         res.set_content(nlohmann::json{{"status", available ? "ok" : "unavailable"}}.dump(),
                         "application/json");
     });
+    server_.Get("/metrics", [this](const httplib::Request& req, httplib::Response& res) {
+        handle_metrics(req, res);
+    });
     server_.Get("/v1/models", [this](const httplib::Request& req, httplib::Response& res) {
         handle_models(req, res);
     });
@@ -478,7 +600,8 @@ void HttpServer::register_routes() {
 }
 
 void HttpServer::handle_models(const httplib::Request&, httplib::Response& res) const {
-    res.set_content(make_models_list(public_model_id_, unix_time_now(), options_.max_context),
+    res.set_content(make_models_list(public_model_id_, unix_time_now(), options_.max_context,
+                                     model_capabilities()),
                     "application/json");
 }
 
@@ -493,8 +616,43 @@ void HttpServer::handle_model(const httplib::Request& req, httplib::Response& re
         write_openai_error(res, error);
         return;
     }
-    res.set_content(make_model_object(public_model_id_, unix_time_now(), options_.max_context),
+    res.set_content(make_model_object(public_model_id_, unix_time_now(), options_.max_context,
+                                      model_capabilities()),
                     "application/json");
+}
+
+ModelCapabilities HttpServer::model_capabilities() const {
+    ModelCapabilities capabilities;
+    capabilities.vision = options_.enable_vision;
+    if (service_ == nullptr) { return capabilities; }
+    const ninfer::PromptCapabilities& prompt = service_->prompt_capabilities();
+    capabilities.thinking                    = prompt.enable_thinking;
+    if (prompt.reasoning_effort.low) { capabilities.reasoning_levels.emplace_back("low"); }
+    if (prompt.reasoning_effort.medium) { capabilities.reasoning_levels.emplace_back("medium"); }
+    if (prompt.reasoning_effort.xhigh) { capabilities.reasoning_levels.emplace_back("xhigh"); }
+    return capabilities;
+}
+
+void HttpServer::handle_metrics(const httplib::Request&, httplib::Response& res) const {
+    std::ostringstream out;
+    append_host_metrics(out);
+    if (service_ != nullptr) {
+        out << "ninfer_running_requests " << service_->runtime_stats().running_requests << '\n';
+    }
+    LastRequest last;
+    {
+        std::lock_guard lock(last_request_mutex_);
+        last = last_request_;
+    }
+    out << "ninfer_requests_completed_total " << last.completed << '\n'
+        << "ninfer_last_prompt_tokens " << last.prompt_tokens << '\n'
+        << "ninfer_last_cache_tokens " << last.cache_tokens << '\n'
+        << "ninfer_last_completion_tokens " << last.completion_tokens << '\n'
+        << "ninfer_last_prompt_per_second " << last.prompt_per_second << '\n'
+        << "ninfer_last_tokens_per_second " << last.tokens_per_second << '\n'
+        << "ninfer_last_draft_tokens " << last.draft_tokens << '\n'
+        << "ninfer_last_draft_accepted_tokens " << last.accepted_tokens << '\n';
+    res.set_content(out.str(), "text/plain; version=0.0.4");
 }
 
 bool HttpServer::bind() { return server_.bind_to_port(options_.host, options_.port); }

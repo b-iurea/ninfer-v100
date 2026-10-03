@@ -10,6 +10,7 @@
 #include <cstdint>
 #include <string>
 #include <string_view>
+#include <vector>
 
 namespace ninfer::serve {
 
@@ -28,10 +29,19 @@ struct OpenAIPromptCachePolicy {
 [[nodiscard]] OpenAIPromptCachePolicy parse_openai_prompt_cache_policy(const RequestJson& body);
 void apply_openai_prompt_cache_policy(GenerationRequest& request, OpenAIPromptCachePolicy policy);
 
+// What clients cannot learn from the OpenAI model object: the loaded template's reasoning efforts
+// and whether media input is enabled (--vision).
+struct ModelCapabilities {
+    std::vector<std::string> reasoning_levels;
+    bool thinking = false;
+    bool vision   = false;
+};
+
 std::string make_models_list(const std::string& model_id, std::int64_t created,
-                             std::uint32_t max_model_len);
+                             std::uint32_t max_model_len, const ModelCapabilities& capabilities = {});
 std::string make_model_object(const std::string& model_id, std::int64_t created,
-                              std::uint32_t max_model_len);
+                              std::uint32_t max_model_len,
+                              const ModelCapabilities& capabilities = {});
 std::string make_error_body(const ApiError& error);
 std::int64_t unix_time_now();
 

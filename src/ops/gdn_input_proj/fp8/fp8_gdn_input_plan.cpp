@@ -1,5 +1,6 @@
 #include "ops/gdn_input_proj/fp8/fp8_gdn_input_plan.h"
 
+#include "ops/common/stage_fp16_volta.h"
 #include "ops/linear/fp8/fp8_config.h"
 #include "ops/linear/fp8/fp8_launch.h"
 #ifdef NINFER_VOLTA_BUILD
@@ -95,7 +96,7 @@ void fp8_gdn_input_a16_dispatch(const Tensor& x, const Weight& weight, Tensor& q
 #ifdef NINFER_VOLTA_BUILD
         if (fp8_volta_qpn_supported(weight.n, weight.k, active)) {
             if (activation.data != nullptr) {
-                fp8_stage_bf16_activation_sm70(input_chunk, activation.data, stream);
+                stage_bf16_as_fp16_sm70(input_chunk, activation.data, stream);
             }
             launch_fp8_gdn_input_volta_qpn(input_chunk, weight, qkv_chunk, z_chunk,
                                            activation.data, stream);

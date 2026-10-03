@@ -141,6 +141,8 @@ enum class ChatTemplateSemantics : std::uint8_t {
 class CompiledChatTemplate {
 public:
     [[nodiscard]] static CompiledChatTemplate resolve(std::string_view source);
+    // True when both sources are known templates that select the same compiled renderer.
+    [[nodiscard]] static bool same_renderer(std::string_view a, std::string_view b);
 
     [[nodiscard]] PromptCapabilities capabilities() const noexcept;
     [[nodiscard]] RenderedChat render(const std::vector<ChatMessage>& messages,

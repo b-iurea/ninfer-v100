@@ -1,5 +1,6 @@
 #include "core/device.h"
 #include "core/tensor.h"
+#include "ops/common/stage_fp16_volta.h"
 #include "ops/linear/fp8/fp8_launch.h"
 #include "ops/linear_swiglu/fp8/fp8_linear_swiglu_qpn_split.cuh"
 
@@ -22,7 +23,7 @@ void fp8_linear_swiglu_qpn_split_launch(const Tensor& x, const Weight& weight, T
                                         cudaStream_t stream) {
     const std::int32_t t = x.ne[1];
     auto* x_fp16 = static_cast<half*>(activation_scratch);
-    fp8_stage_bf16_activation_sm70(x, x_fp16, stream);
+    stage_bf16_as_fp16_sm70(x, x_fp16, stream);
 
     Weight gate_weight = weight;
     gate_weight.n      = kIntermediate;

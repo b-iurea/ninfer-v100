@@ -559,6 +559,16 @@ int test_reasoning_and_extensions() {
     failures +=
         check(api_error([&] { (void)parse(body); }).code == "mm_processor_kwargs_not_supported",
               "non-empty media processor kwargs rejected");
+
+    body                           = base_request();
+    body["thinking_budget_tokens"] = 512;
+    failures += check(parse(body).generation.thinking_budget == 512u,
+                      "llama.cpp thinking_budget_tokens sets the request thinking budget");
+    failures += check(!parse(base_request()).generation.thinking_budget,
+                      "an absent thinking budget keeps the server default");
+    body["thinking_budget_tokens"] = 0;
+    failures += check(api_error([&] { (void)parse(body); }).status == 400,
+                      "a nonpositive thinking budget is rejected");
     return failures;
 }
 
@@ -771,6 +781,19 @@ int test_common_objects() {
     const Json model = Json::parse(make_model_object("qwen", 7, 240000));
     failures += check(model["max_model_len"] == 240000,
                       "model lookup advertises the configured context limit");
+    failures += check(model["architecture"]["input_modalities"] == Json::array({"text"}) &&
+                          model["meta"]["ninfer"]["reasoning"]["levels"].empty(),
+                      "default capabilities advertise text only and no reasoning levels");
+    const Json capable = Json::parse(make_models_list(
+        "qwen", 7, 240000,
+        ModelCapabilities{.reasoning_levels = {"low", "medium", "xhigh"}, .thinking = true,
+                          .vision = true}))["data"][0];
+    failures += check(capable["architecture"]["input_modalities"] ==
+                              Json::array({"text", "image", "video"}) &&
+                          capable["meta"]["ninfer"]["reasoning"]["levels"] ==
+                              Json::array({"low", "medium", "xhigh"}) &&
+                          capable["meta"]["ninfer"]["reasoning"]["thinking"] == true,
+                      "capabilities advertise media input and the template reasoning levels");
     const Json error = Json::parse(make_error_body(
         ApiError{.status = 400, .message = "bad", .param = "messages", .code = "invalid"}));
     failures += check(error["error"]["param"] == "messages" && error["error"]["code"] == "invalid",

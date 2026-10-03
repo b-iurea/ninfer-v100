@@ -321,6 +321,7 @@ if(CMAKE_CUDA_ARCHITECTURES STREQUAL "70")
     ops/gdn_input_proj/fp8/fp8_gdn_input_cutlass_sm70.cu
     ops/gdn_input_proj/q4_q5/q4_q5_gdn_input_cutlass_sm70.cu
     ops/gdn_input_proj/w8/w8_gdn_input_cutlass_sm70.cu
+    ops/common/stage_fp16_volta.cu
     ops/linear/fp8/fp8_volta_qpn_gemm.cu
     ops/linear/fp8/fp8_prepack_sm70.cu
     ops/linear/fp8/fp8_cutlass_sm70.cu
@@ -474,5 +475,5 @@ if(NINFER_BUILD_SERVE)
     ${PROJECT_SOURCE_DIR}/third_party/cpp-httplib)
   target_link_libraries(ninfer_serve
     PUBLIC ninfer_engine Threads::Threads
-    PRIVATE ninfer_media_acquire ninfer_product_logging CUDA::cudart)
+    PRIVATE ninfer_media_acquire ninfer_product_logging CUDA::cudart ${CMAKE_DL_LIBS})
 endif()

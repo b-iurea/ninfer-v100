@@ -54,8 +54,9 @@ omitted at startup.
 | Method and path | Behavior |
 |---|---|
 | `GET /health` | Engine readiness |
-| `GET /v1/models` | configured OpenAI model alias and effective `max_model_len` |
-| `GET /v1/models/{id}` | lookup of the configured alias and effective `max_model_len` |
+| `GET /v1/models` | configured OpenAI model alias, effective `max_model_len`, and capabilities |
+| `GET /v1/models/{id}` | lookup of the configured alias, effective `max_model_len`, and capabilities |
+| `GET /metrics` | Prometheus text: GPU, host memory, and the last completed request |
 | `POST /v1/chat/completions` | OpenAI-style chat generation |
 | `POST /v1/responses` | OpenAI Responses Core generation, state, typed Items, and SSE |
 | `POST /v1/responses/input_tokens` | Responses prompt-token count without generation |
@@ -68,6 +69,23 @@ omitted at startup.
 `GET /health` returns HTTP 200 with `{"status":"ok"}` while the Engine can accept work. After an
 Engine-wide failure it returns HTTP 503 with `{"status":"unavailable"}`. Temporary queue
 saturation does not make the Engine unavailable. The endpoint remains unauthenticated.
+
+Model objects also carry what a client cannot learn from the OpenAI fields:
+`architecture.input_modalities` is `["text"]`, or `["text","image","video"]` with `--vision`, and
+`meta.ninfer.reasoning` holds `thinking` (the loaded template has a thinking switch) and `levels`,
+the `reasoning_effort` values that template accepts besides `none` (for example
+`["low","medium","xhigh"]`; empty when it has no effort control).
+
+`GET /metrics` uses the llama-swap metric names under the `ninfer_` prefix:
+`ninfer_gpu_util_percent`, `ninfer_gpu_memory_used_bytes`, `ninfer_gpu_memory_total_bytes`,
+`ninfer_gpu_temperature_celsius`, and `ninfer_gpu_power_draw_watts`, labelled `id` and `name`, read
+through the driver's NVML (omitted when `libnvidia-ml.so.1` cannot be loaded);
+`ninfer_memory_used_bytes` and `ninfer_memory_total_bytes` from `/proc/meminfo`;
+`ninfer_running_requests`; and the most recently completed request as
+`ninfer_requests_completed_total`, `ninfer_last_prompt_tokens`, `ninfer_last_cache_tokens`,
+`ninfer_last_completion_tokens`, `ninfer_last_prompt_per_second`,
+`ninfer_last_tokens_per_second`, `ninfer_last_draft_tokens`, and
+`ninfer_last_draft_accepted_tokens`. It requires the API key like every endpoint except `/health`.
 
 Every OpenAI-compatible response carries a unique `x-request-id` header, including streaming and
 error responses. Anthropic endpoints use their separate `request-id` contract.
@@ -117,6 +135,8 @@ The endpoint supports:
   parallel calls enabled, assistant tool-call history, tool-result messages, and legacy
   function-call history;
 - the top-level `reasoning_effort` field;
+- the llama.cpp-compatible top-level `thinking_budget_tokens` (a positive integer), a per-request
+  replacement for `--default-thinking-budget`;
 - `enable_thinking` and `preserve_thinking`, either at top level or in
   `chat_template_kwargs`;
 - Assistant `reasoning_content` and `reasoning` history aliases.
