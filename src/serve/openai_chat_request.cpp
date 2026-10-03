@@ -882,6 +882,16 @@ void parse_output_limit(const Json& body, const RequestLimits& limits, OpenAICha
     }
 }
 
+// llama.cpp-compatible per-request thinking cap; the same Engine budget Anthropic budget_tokens sets.
+void parse_thinking_budget(const Json& body, GenerationRequest& output) {
+    const std::optional<int> budget = optional_int(body, "thinking_budget_tokens");
+    if (!budget) { return; }
+    if (*budget < 1) {
+        bad_request("thinking_budget_tokens must be a positive integer", "thinking_budget_tokens");
+    }
+    output.thinking_budget = static_cast<std::uint32_t>(*budget);
+}
+
 } // namespace
 
 OpenAIChatRequest parse_chat_completion_request(const Json& body, const RequestLimits& limits) {
@@ -909,6 +919,7 @@ OpenAIChatRequest parse_chat_completion_request(const Json& body, const RequestL
     parse_response_observations(body, output);
     parse_output_limit(body, limits, output);
     parse_reasoning_effort(body, output.generation);
+    parse_thinking_budget(body, output.generation);
     const TemplateOptions template_options = parse_template_options(body);
     output.generation.enable_thinking      = template_options.enable_thinking;
     output.generation.preserve_thinking    = template_options.preserve_thinking;

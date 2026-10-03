@@ -475,5 +475,5 @@ if(NINFER_BUILD_SERVE)
     ${PROJECT_SOURCE_DIR}/third_party/cpp-httplib)
   target_link_libraries(ninfer_serve
     PUBLIC ninfer_engine Threads::Threads
-    PRIVATE ninfer_media_acquire ninfer_product_logging CUDA::cudart)
+    PRIVATE ninfer_media_acquire ninfer_product_logging CUDA::cudart ${CMAKE_DL_LIBS})
 endif()

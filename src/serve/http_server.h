@@ -1,5 +1,6 @@
 #pragma once
 
+#include "serve/openai_common.h"
 #include "serve/generation_service.h"
 #include "serve/operational_log.h"
 #include "serve/openai_responses_store.h"
@@ -87,6 +88,8 @@ private:
     void handle_response_compact(const httplib::Request& req, httplib::Response& res);
     void handle_models(const httplib::Request& req, httplib::Response& res) const;
     void handle_model(const httplib::Request& req, httplib::Response& res) const;
+    void handle_metrics(const httplib::Request& req, httplib::Response& res) const;
+    [[nodiscard]] ModelCapabilities model_capabilities() const;
 
     void record_request_start(const RequestLogContext& context);
     void record_request_rejected(const RequestRejectionLogContext& context);
@@ -109,6 +112,20 @@ private:
     std::condition_variable stats_cv_;
     std::thread stats_thread_;
     bool stats_stopping_ = false;
+
+    // The most recently completed request, for /metrics.
+    struct LastRequest {
+        std::uint64_t completed         = 0;
+        int prompt_tokens               = 0;
+        std::uint32_t cache_tokens      = 0;
+        int completion_tokens           = 0;
+        double prompt_per_second        = 0.0;
+        double tokens_per_second        = 0.0;
+        std::uint64_t draft_tokens      = 0;
+        std::uint64_t accepted_tokens   = 0;
+    };
+    mutable std::mutex last_request_mutex_;
+    LastRequest last_request_;
 };
 
 } // namespace ninfer::serve

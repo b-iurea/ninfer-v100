@@ -110,6 +110,10 @@ public:
 
     [[nodiscard]] bool is_available() const { return engine_->is_available(); }
 
+    [[nodiscard]] const ninfer::PromptCapabilities& prompt_capabilities() const noexcept {
+        return prompt_capabilities_;
+    }
+
     [[nodiscard]] ninfer::MediaCacheSummary media_cache_summary() const {
         return engine_->media_cache_summary();
     }
