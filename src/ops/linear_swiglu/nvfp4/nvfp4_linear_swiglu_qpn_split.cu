@@ -1,5 +1,6 @@
 #include "core/device.h"
 #include "core/tensor.h"
+#include "ops/common/stage_fp16_volta.h"
 #include "ops/linear/nvfp4/nvfp4_launch.h"
 #include "ops/linear_swiglu/nvfp4/nvfp4_linear_swiglu_qpn_split.cuh"
 
@@ -15,12 +16,6 @@ namespace ninfer::ops::detail {
 namespace {
 constexpr std::int32_t kIntermediate = 17408; // Nvfp4MlpGateUpGeometry::kOutputRows / 2
 constexpr std::int32_t kMTileOffset  = kIntermediate / 128; // 136, exact
-
-__global__ void bf16_to_fp16_kernel(const __nv_bfloat16* __restrict__ input,
-                                    half* __restrict__ output, std::int64_t count) {
-    const std::int64_t i = static_cast<std::int64_t>(blockIdx.x) * blockDim.x + threadIdx.x;
-    if (i < count) { output[i] = __float2half(__bfloat162float(input[i])); }
-}
 } // namespace
 
 bool nvfp4_linear_swiglu_qpn_split_supported(std::int32_t k, std::int32_t t) noexcept {
@@ -35,9 +30,7 @@ void nvfp4_linear_swiglu_qpn_split_launch(const Tensor& x, const Weight& weight,
     const std::int32_t t = x.ne[1];
     const float inverse_weight_divisor = 1.0F / weight.weight_scale_divisor;
     auto* x_fp16 = static_cast<half*>(activation_scratch);
-    const std::int64_t activation_count = static_cast<std::int64_t>(k) * t;
-    bf16_to_fp16_kernel<<<static_cast<int>((activation_count + 255) / 256), 256, 0, stream>>>(
-        static_cast<const __nv_bfloat16*>(x.data), x_fp16, activation_count);
+    stage_bf16_as_fp16_sm70(x, x_fp16, stream);
 
     Weight gate_weight = weight;
     gate_weight.n      = kIntermediate;

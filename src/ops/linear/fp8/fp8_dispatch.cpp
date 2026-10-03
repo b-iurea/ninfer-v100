@@ -1,6 +1,7 @@
 #include "ops/linear/fp8/fp8_dispatch.h"
 
 #include "core/layout.h"
+#include "ops/common/stage_fp16_volta.h"
 #include "ops/linear/fp8/fp8_a8_plan.h"
 #include "ops/linear/fp8/fp8_config.h"
 #include "ops/linear/fp8/fp8_format.h"
@@ -86,7 +87,7 @@ void launch_a16(const Tensor& x, const Weight& weight, Tensor& out, WorkspaceAre
 #ifdef NINFER_VOLTA_BUILD
         if (fp8_volta_qpn_supported(weight.n, weight.k, active)) {
             if (activation.data != nullptr) {
-                fp8_stage_bf16_activation_sm70(input_chunk, activation.data, stream);
+                stage_bf16_as_fp16_sm70(input_chunk, activation.data, stream);
                 launch_fp8_volta_qpn_fp16(input_chunk, weight, activation.data, output_chunk,
                                           stream);
             } else {

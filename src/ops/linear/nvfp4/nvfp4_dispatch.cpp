@@ -1,5 +1,6 @@
 #include "ops/linear/nvfp4/nvfp4_dispatch.h"
 
+#include "ops/common/stage_fp16_volta.h"
 #include "ops/linear/nvfp4/nvfp4_config.h"
 #include "ops/linear/nvfp4/nvfp4_format.h"
 #include "ops/linear/nvfp4/nvfp4_launch.h"
@@ -7,6 +8,7 @@
 
 #include <algorithm>
 #include <cstdint>
+#include <optional>
 #include <stdexcept>
 
 namespace ninfer::ops::detail {
@@ -69,6 +71,18 @@ void launch_a16(const Tensor& x, const Weight& weight, Tensor& out,
     // SIMT throughput decays with T while QPN's is flat across the tile.
     const bool qpn            = nvfp4_volta_qpn_supported(weight.n, weight.k, kNvfp4VoltaQpnMaxTokens);
     const std::int32_t kChunk = qpn ? kNvfp4VoltaQpnMaxTokens : kNvfp4LastSmallT;
+    // Stage each QPN chunk's activation as FP16 once instead of converting it inside every CTA.
+    // Measured on the MLP down shape (N=5120, K=17408, T=1..4): 140 -> 82 us per call. Callers
+    // without room in their workspace keep the in-kernel conversion, which yields the same values.
+    std::optional<WorkspaceArena::Scope> scope;
+    DeviceSpan activation;
+    const std::size_t activation_bytes = static_cast<std::size_t>(weight.k) *
+                                         std::min(total_t, kChunk) * sizeof(std::uint16_t);
+    if (qpn && workspace != nullptr &&
+        workspace->capacity() - workspace->used() >= activation_bytes) {
+        scope.emplace(workspace->scope());
+        activation = workspace->alloc_bytes(activation_bytes, 256);
+    }
 #else
     constexpr std::int32_t kChunk = kNvfp4LastSmallT;
 #endif
@@ -82,7 +96,13 @@ void launch_a16(const Tensor& x, const Weight& weight, Tensor& out,
         Tensor output_chunk(output, DType::BF16, {weight.n, active});
 #ifdef NINFER_VOLTA_BUILD
         if (nvfp4_volta_qpn_supported(weight.n, weight.k, active)) {
-            launch_nvfp4_volta_qpn(input_chunk, weight, output_chunk, stream);
+            if (activation.data != nullptr) {
+                stage_bf16_as_fp16_sm70(input_chunk, activation.data, stream);
+                launch_nvfp4_volta_qpn_fp16(input_chunk, weight, activation.data, output_chunk,
+                                            stream);
+            } else {
+                launch_nvfp4_volta_qpn(input_chunk, weight, output_chunk, stream);
+            }
             continue;
         }
 #endif
@@ -111,12 +131,21 @@ std::size_t nvfp4_linear_workspace_capacity_bytes(std::int32_t output_rows, std:
     // so a caller sizing for the widest T this interval reaches has it available. A caller that
     // doesn't (the zero-workspace linear() overload) still works -- launch_a16 falls back to the
     // chunked route rather than fault.
+    std::size_t capacity = 0;
     if (policy == LinearPolicy::A16Only && max_tokens > kNvfp4VoltaQpnMaxTokens &&
         nvfp4_volta_mma_supported(output_rows, input_rows, max_tokens)) {
-        return nvfp4_volta_mma_workspace_bytes(output_rows, input_rows, max_tokens);
+        capacity = nvfp4_volta_mma_workspace_bytes(output_rows, input_rows, max_tokens);
     }
-#endif
+    // FP16 activation staging for the QPN chunks (see launch_a16).
+    if (nvfp4_volta_qpn_supported(output_rows, input_rows, kNvfp4VoltaQpnMaxTokens)) {
+        capacity = std::max(capacity, static_cast<std::size_t>(input_rows) *
+                                          std::min(max_tokens, kNvfp4VoltaQpnMaxTokens) *
+                                          sizeof(std::uint16_t));
+    }
+    return capacity;
+#else
     return 0;
+#endif
 }
 
 void nvfp4_dispatch(const Tensor& x, const Weight& weight, Tensor& out, LinearPolicy policy,

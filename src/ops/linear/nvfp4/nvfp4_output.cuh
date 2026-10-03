@@ -30,6 +30,19 @@ struct Nvfp4ContiguousOutput {
     }
 };
 
+// Adds the FP32 projection into the BF16 residual in place: one BF16 round for the sum, with no
+// rounded projection in between. Mirrors Fp8ResidualOutput.
+struct Nvfp4ResidualOutput {
+    __nv_bfloat16* data;
+    std::int32_t rows;
+
+    __device__ __forceinline__ void store(std::int32_t parent_row, std::int32_t token,
+                                          float value) const {
+        const std::int64_t index = static_cast<std::int64_t>(token) * rows + parent_row;
+        data[index] = __float2bfloat16_rn(value + __bfloat162float(data[index]));
+    }
+};
+
 // Writes the mma accumulator straight through, no BF16 round. Exists for split-projection SwiGLU
 // (see nvfp4_linear_swiglu_qpn_split.cuh): two independent QPN2 launches -- one per weight half,
 // unmodified, at whatever schedule QPN2 already measured fastest for this shape -- write gate and

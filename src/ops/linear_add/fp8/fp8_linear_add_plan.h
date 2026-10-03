@@ -24,8 +24,9 @@ void fp8_linear_add_small_t_launch(const Tensor& x, const Weight& weight, Tensor
 void fp8_linear_add_a8_launch(const Tensor& x, const Weight& weight, Tensor& residual,
                               WorkspaceArena& workspace, cudaStream_t stream);
 #ifdef NINFER_VOLTA_BUILD
-void fp8_linear_add_qpn_launch(const Tensor& x, const Weight& weight, Tensor& residual,
-                               cudaStream_t stream);
+// x_fp16 is an optional pre-staged FP16 copy of x (stage_bf16_as_fp16_sm70); null reads x.
+void fp8_linear_add_qpn_launch(const Tensor& x, const Weight& weight, const void* x_fp16,
+                               Tensor& residual, cudaStream_t stream);
 #endif
 
 void fp8_linear_add_dispatch(const Tensor& x, const Weight& weight, Tensor& residual,

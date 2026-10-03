@@ -5,7 +5,9 @@
 #include "ninfer/ops/residual_add.h"
 #include "ops/linear/nvfp4/nvfp4_config.h"
 #ifdef NINFER_VOLTA_BUILD
+#include "ops/common/stage_fp16_volta.h"
 #include "ops/linear/nvfp4/nvfp4_cutlass_sm70.h"
+#include "ops/linear/nvfp4/nvfp4_launch.h"
 #endif
 
 #include <algorithm>
@@ -31,9 +33,9 @@ Nvfp4LinearAddRoute resolve_route(std::int32_t output_rows, std::int32_t input_r
     }
     if (policy == LinearPolicy::A16Only) {
 #ifdef NINFER_VOLTA_BUILD
-        // Prepacked down projections are consumed by QPN2 for every decode width. Materialize the
-        // projection and add the residual separately because the row-major fused kernels cannot
-        // read that load-time layout.
+        // Prepacked down projections are consumed by QPN2 for every decode width, which adds the
+        // residual in its own epilogue; wider T materializes the projection and adds separately
+        // because the row-major fused kernels cannot read that load-time layout.
         return Nvfp4LinearAddRoute::LinearThenAdd;
 #else
         return Nvfp4LinearAddRoute::A16;
@@ -75,8 +77,31 @@ Tensor allocate_projected(Allocator& allocator, std::int32_t output_rows, std::i
     return allocator.alloc(DType::BF16, {output_rows, tokens}, 256);
 }
 
+// Decode widths: QPN2 adds the projection into the residual directly, reading the activation as
+// FP16 staged once per call (not converted inside every CTA).
+bool fused_qpn_residual(std::int32_t output_rows, std::int32_t input_rows, std::int32_t tokens) {
+    return nvfp4_volta_qpn_supported(output_rows, input_rows, tokens) &&
+           tokens <= kNvfp4VoltaQpnMaxTokens;
+}
+
+std::size_t staged_activation_bytes(std::int32_t input_rows, std::int32_t tokens) {
+    return static_cast<std::size_t>(input_rows) * tokens * sizeof(std::uint16_t);
+}
+
 void launch_linear_then_add(const Tensor& x, const Weight& weight, Tensor& residual,
                             WorkspaceArena& workspace, cudaStream_t stream) {
+    if (fused_qpn_residual(weight.n, weight.k, x.ne[1])) {
+        const std::size_t bytes = staged_activation_bytes(weight.k, x.ne[1]);
+        if (workspace.capacity() - workspace.used() < bytes) {
+            launch_nvfp4_volta_qpn_residual(x, weight, nullptr, residual, stream);
+            return;
+        }
+        auto scope              = workspace.scope();
+        const DeviceSpan staged = workspace.alloc_bytes(bytes, 256);
+        stage_bf16_as_fp16_sm70(x, staged.data, stream);
+        launch_nvfp4_volta_qpn_residual(x, weight, staged.data, residual, stream);
+        return;
+    }
     auto scope         = workspace.scope();
     Tensor projected    = allocate_projected(workspace, weight.n, x.ne[1]);
     if (x.ne[1] >= 33) {
@@ -95,6 +120,10 @@ void launch_linear_then_add(const Tensor& x, const Weight& weight, Tensor& resid
 std::size_t linear_then_add_workspace_bytes(std::int32_t output_rows, std::int32_t input_rows,
                                             std::int32_t tokens) {
     WorkspaceLayoutBuilder layout;
+    if (fused_qpn_residual(output_rows, input_rows, tokens)) {
+        (void)layout.alloc_bytes(staged_activation_bytes(input_rows, tokens), 256);
+        return layout.peak_bytes(1);
+    }
     (void)allocate_projected(layout, output_rows, tokens);
     const std::size_t linear_bytes = tokens >= 33
         ? nvfp4_cutlass_sm70_workspace_bytes(output_rows, input_rows, tokens)
