@@ -415,8 +415,8 @@ $("#cfg").addEventListener("keydown", e => {
 // ---- settings
 const S = ["listen","serve_bin","perplexity_bin","corpus","port_start","exclusive","load_timeout","api_key","cors"];
 function snip() {
-  const k = $("#s-api_key").value;
-  $("#s-snip").textContent = `curl ${location.origin}/v1/chat/completions \\\n` + (k ? `  -H 'Authorization: Bearer ${k}' \\\n` : "")
+  const e = $("#s-api_key"), k = e.value && (e.type === "password" ? "$NINFER_API_KEY" : e.value);
+  $("#s-snip").textContent = `curl ${location.origin}/v1/chat/completions \\\n` + (k ? `  -H "Authorization: Bearer ${k}" \\\n` : "")
     + `  -H 'Content-Type: application/json' \\\n  -d '{"model":"…","messages":[{"role":"user","content":"Hello"}]}'`;
 }
 async function loadSettings() {
@@ -425,7 +425,7 @@ async function loadSettings() {
   snip();
 }
 $("#s-api_key").oninput = snip;
-$("#s-eye").onclick = () => { const e = $("#s-api_key"); e.type = e.type === "password" ? "text" : "password"; };
+$("#s-eye").onclick = () => { const e = $("#s-api_key"); e.type = e.type === "password" ? "text" : "password"; snip(); };
 $("#s-gen").onclick = () => {
   $("#s-api_key").value = "nf-" + [...crypto.getRandomValues(new Uint8Array(24))].map(b => b.toString(16).padStart(2, "0")).join("");
   $("#s-api_key").type = "text"; snip();
