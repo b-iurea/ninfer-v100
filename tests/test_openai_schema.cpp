@@ -569,6 +569,16 @@ int test_reasoning_and_extensions() {
     body["thinking_budget_tokens"] = 0;
     failures += check(api_error([&] { (void)parse(body); }).status == 400,
                       "a nonpositive thinking budget is rejected");
+    body                             = base_request();
+    body["reasoning_budget_message"] = "\n\nTime is up.";
+    failures += check(parse(body).generation.thinking_budget_message == "\n\nTime is up.",
+                      "reasoning_budget_message replaces the thinking budget guidance");
+    body["reasoning_budget_message"] = "done</think>";
+    failures += check(api_error([&] { (void)parse(body); }).status == 400,
+                      "a budget message cannot close reasoning itself");
+    body["reasoning_budget_message"] = "";
+    failures += check(api_error([&] { (void)parse(body); }).status == 400,
+                      "an empty budget message is rejected");
     return failures;
 }
 

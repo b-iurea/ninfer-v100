@@ -1587,9 +1587,23 @@ OutputSession Frontend::make_output_session(const PreparedPrompt& prompt,
     if (prompt.data_ == nullptr) { throw std::invalid_argument("prepared prompt is empty"); }
     StopPolicy policy = merge_stop_policy(*impl_->tokenizer, caller_stop);
     if (output.raw) { policy.publish_stop_token = true; }
+    std::shared_ptr<const std::vector<TokenId>> control = impl_->thinking_control_tokens;
+    if (thinking.budget && thinking.message) {
+        // A caller-chosen guidance replaces the canonical one; the close stays canonical so the
+        // reasoning parser and the next turn's template see the same boundary.
+        std::vector<TokenId> encoded = impl_->tokenizer->encode(
+            *thinking.message + std::string(fi::kCanonicalReasoningCloseSerialization));
+        for (const TokenId token : encoded) {
+            if (std::find(impl_->defaults.token_ids.begin(), impl_->defaults.token_ids.end(),
+                          token) != impl_->defaults.token_ids.end()) {
+                throw std::invalid_argument("thinking budget message contains a terminal token");
+            }
+        }
+        control = std::make_shared<const std::vector<TokenId>>(std::move(encoded));
+    }
     return OutputSession(std::make_unique<OutputSession::Impl>(
         impl_->tokenizer, std::move(policy), output, prompt.data_->starts_in_reasoning, thinking,
-        impl_->thinking_control_tokens, prompt.data_->tool_call_output));
+        std::move(control), prompt.data_->tool_call_output));
 }
 
 const StopPolicy& Frontend::default_stop_policy() const noexcept { return impl_->defaults; }

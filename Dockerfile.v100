@@ -1,0 +1,81 @@
+# syntax=docker/dockerfile:1
+# Tesla V100 (sm_70) image: ninfer-serve + ninfer-perplexity behind ninfer-proxy (UI + API on :8080).
+#
+#   docker build -f Dockerfile.v100 -t ninfer-v100 .
+#   docker run -d --gpus all -p 8080:8080 \
+#     -v /path/to/models:/models -v $PWD/config.yaml:/config/config.yaml ninfer-v100
+#
+# Only :8080 is published; models listen on 127.0.0.1 inside the container and are reached via the proxy.
+
+FROM nvidia/cuda:12.8.1-devel-ubuntu24.04 AS ninfer
+
+ARG DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends \
+        ca-certificates \
+        cmake \
+        g++-14 \
+        git \
+        libavcodec-dev \
+        libavformat-dev \
+        libavutil-dev \
+        libcurl4-openssl-dev \
+        libswscale-dev \
+        ninja-build \
+        pkg-config \
+        python3 \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /src
+# Only the engine sources, so editing proxy/ does not invalidate the CUDA build cache.
+COPY CMakeLists.txt ./
+COPY include include
+COPY src src
+COPY apps apps
+COPY third_party third_party
+
+# CUTLASS-heavy units need several GB of RAM each; lower BUILD_JOBS if the build host OOMs.
+ARG BUILD_JOBS=8
+RUN cmake -S . -B /build -G Ninja \
+        -DCMAKE_BUILD_TYPE=Release \
+        -DCMAKE_CUDA_COMPILER=/usr/local/cuda/bin/nvcc \
+        -DCMAKE_CUDA_ARCHITECTURES=70 \
+        -DCMAKE_CXX_COMPILER=g++-14 \
+        -DCMAKE_CUDA_HOST_COMPILER=g++-14 \
+        -DNINFER_BUILD_APPS=ON \
+        -DBUILD_TESTING=OFF \
+        -DNINFER_BUILD_BENCHMARKS=OFF \
+    && cmake --build /build --parallel ${BUILD_JOBS} --target ninfer-serve ninfer-perplexity
+
+FROM golang:1.23 AS proxy
+WORKDIR /src
+COPY proxy/go.mod proxy/go.sum ./
+RUN go mod download
+COPY proxy/*.go proxy/index.html ./
+RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /ninfer-proxy .
+
+FROM nvidia/cuda:12.8.1-runtime-ubuntu24.04
+
+ARG DEBIAN_FRONTEND=noninteractive
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends \
+        ca-certificates \
+        libavcodec60 \
+        libavformat60 \
+        libavutil58 \
+        libcurl4t64 \
+        libstdc++6 \
+        libswscale7 \
+    && rm -rf /var/lib/apt/lists/*
+
+COPY --from=ninfer /build/apps/ninfer-serve /build/apps/ninfer-perplexity /usr/local/bin/
+COPY --from=proxy /ninfer-proxy /usr/local/bin/ninfer-proxy
+COPY eval/corpora/perplexity-1m /opt/ninfer/corpora/perplexity-1m
+COPY proxy/config.example.yaml /config/config.yaml
+
+# utility = nvidia-smi inside the container, used for the GPU metrics in the UI.
+ENV NVIDIA_DRIVER_CAPABILITIES=compute,utility
+WORKDIR /workspace
+EXPOSE 8080
+STOPSIGNAL SIGTERM
+CMD ["ninfer-proxy", "-config", "/config/config.yaml"]

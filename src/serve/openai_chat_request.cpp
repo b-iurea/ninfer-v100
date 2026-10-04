@@ -892,6 +892,22 @@ void parse_thinking_budget(const Json& body, GenerationRequest& output) {
     output.thinking_budget = static_cast<std::uint32_t>(*budget);
 }
 
+// llama.cpp-compatible text committed when the thinking budget runs out, before </think>.
+void parse_thinking_budget_message(const Json& body, GenerationRequest& output) {
+    constexpr const char* param = "reasoning_budget_message";
+    if (!body.contains(param) || body.at(param).is_null()) { return; }
+    if (!body.at(param).is_string()) { bad_request("reasoning_budget_message must be a string", param); }
+    std::string message = body.at(param).get<std::string>();
+    if (message.empty() || message.size() > 1024) {
+        bad_request("reasoning_budget_message must hold 1 to 1024 bytes", param);
+    }
+    // Special-token markup would let the message close reasoning or end the turn itself.
+    if (message.find("<|") != std::string::npos || message.find("think>") != std::string::npos) {
+        bad_request("reasoning_budget_message must not contain special-token markup", param);
+    }
+    output.thinking_budget_message = std::move(message);
+}
+
 } // namespace
 
 OpenAIChatRequest parse_chat_completion_request(const Json& body, const RequestLimits& limits) {
@@ -920,6 +936,7 @@ OpenAIChatRequest parse_chat_completion_request(const Json& body, const RequestL
     parse_output_limit(body, limits, output);
     parse_reasoning_effort(body, output.generation);
     parse_thinking_budget(body, output.generation);
+    parse_thinking_budget_message(body, output.generation);
     const TemplateOptions template_options = parse_template_options(body);
     output.generation.enable_thinking      = template_options.enable_thinking;
     output.generation.preserve_thinking    = template_options.preserve_thinking;

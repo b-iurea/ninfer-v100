@@ -242,6 +242,9 @@ struct ThinkingControlOptions {
     // Omitted means unlimited. Injected target-control tokens consume the total output budget but
     // not this model-origin budget.
     std::optional<std::uint32_t> budget;
+    // Text committed when the budget runs out, before the canonical reasoning close. Omitted uses
+    // the target's canonical guidance. Must not contain special-token markup.
+    std::optional<std::string> message;
 };
 
 struct ExecutionOptions {

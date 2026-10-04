@@ -136,7 +136,9 @@ The endpoint supports:
   function-call history;
 - the top-level `reasoning_effort` field;
 - the llama.cpp-compatible top-level `thinking_budget_tokens` (a positive integer), a per-request
-  replacement for `--default-thinking-budget`;
+  replacement for `--default-thinking-budget`, and `reasoning_budget_message` (1 to 1024 bytes,
+  no special-token markup), the text committed in place of Qwen's canonical guidance when that
+  budget runs out; the canonical `</think>` close follows it;
 - `enable_thinking` and `preserve_thinking`, either at top level or in
   `chat_template_kwargs`;
 - Assistant `reasoning_content` and `reasoning` history aliases.
