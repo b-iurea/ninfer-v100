@@ -1,0 +1,20 @@
+# ninfer-proxy configuration. Editable from the web UI (tab "Config").
+listen: ":8080"                      # proxy + UI port (restart to change)
+serve_bin: ninfer-serve
+perplexity_bin: ninfer-perplexity
+corpus: /opt/ninfer/corpora/perplexity-1m/manifest.json
+port_start: 9100                     # internal ports, never published; models without `port` get the first free port from here
+exclusive: true                      # one GPU: loading a model (or a perplexity run) unloads the others
+load_timeout: 900                    # seconds an API call waits for an on-demand load
+
+# Each key is the model id clients send in "model". The proxy adds
+# --host 127.0.0.1 --port N --model-id <key>; put any other ninfer-serve flag in args.
+models:
+  qwen3.8-27b-nvfp4:
+    description: Qwen3.8 27B NVFP4, MTP
+    path: /models/qwen3_8_27b_nvfp4.ninfer
+    args: ["--max-context", "131072", "--kv-dtype", "int8"]
+  qwen3.6-35b-a3b:
+    path: /models/qwen3_6_35b_a3b.ninfer
+    port: 9200
+    args: ["--max-context", "65536"]

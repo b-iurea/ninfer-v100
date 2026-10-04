@@ -1,0 +1,331 @@
+<!doctype html>
+<html lang="it">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>NInfer Console</title>
+<style>
+:root{
+  --bg:#0b0d10;--panel:#12151a;--panel2:#171b21;--line:#232830;--text:#e6e8eb;--dim:#8b929c;--faint:#5b626c;
+  --accent:#7cc4ff;--ok:#5fd38d;--warn:#f2c14e;--err:#ff6b6b;--r:10px;
+  --mono:ui-monospace,SFMono-Regular,"JetBrains Mono",Menlo,Consolas,monospace;
+}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%;background:var(--bg);color:var(--text);font:14px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif}
+button,input,select,textarea{font:inherit;color:inherit}
+header{display:flex;align-items:center;gap:24px;padding:12px 20px;border-bottom:1px solid var(--line);flex-wrap:wrap}
+.brand{font-weight:600;letter-spacing:.3px;display:flex;align-items:center;gap:8px}
+.brand i{width:9px;height:9px;border-radius:50%;background:var(--accent);box-shadow:0 0 12px var(--accent)}
+nav{display:flex;gap:2px;background:var(--panel);padding:3px;border-radius:8px}
+nav button{background:none;border:0;padding:5px 12px;border-radius:6px;color:var(--dim);cursor:pointer}
+nav button.on{background:var(--panel2);color:var(--text)}
+.stats{display:flex;gap:18px;margin-left:auto;flex-wrap:wrap}
+.stat{min-width:92px}
+.stat small{display:block;color:var(--faint);font-size:11px;text-transform:uppercase;letter-spacing:.6px}
+.stat b{font-weight:500;font-variant-numeric:tabular-nums;font-size:13px}
+.bar{height:3px;background:var(--line);border-radius:2px;margin-top:4px;overflow:hidden}
+.bar span{display:block;height:100%;background:var(--accent);transition:width .6s}
+main{padding:20px;max-width:1400px;margin:0 auto}
+.grid{display:grid;grid-template-columns:300px 1fr;gap:20px}
+@media(max-width:860px){.grid{grid-template-columns:1fr}}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:var(--r)}
+.list{padding:6px}
+.model{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:8px;cursor:pointer}
+.model:hover{background:var(--panel2)}
+.model.sel{background:var(--panel2);box-shadow:inset 2px 0 0 var(--accent)}
+.model .n{flex:1;min-width:0}
+.model .n div{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.model .n small{color:var(--faint);font-size:12px}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--faint);flex:none}
+.dot.ready{background:var(--ok);box-shadow:0 0 8px var(--ok)}
+.dot.loading,.dot.stopping{background:var(--warn);animation:pulse 1s infinite}
+.dot.failed{background:var(--err)}
+@keyframes pulse{50%{opacity:.35}}
+.detail{padding:20px;display:flex;flex-direction:column;gap:16px;min-height:70vh}
+.head{display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap}
+.head h2{margin:0;font-size:18px;font-weight:600}
+.head .meta{color:var(--dim);font-size:12px;font-family:var(--mono);word-break:break-all}
+.head .act{margin-left:auto;display:flex;gap:8px}
+.btn{background:var(--panel2);border:1px solid var(--line);padding:7px 14px;border-radius:8px;cursor:pointer}
+.btn:hover{border-color:var(--faint)}
+.btn.pri{background:var(--accent);color:#06121d;border-color:transparent;font-weight:600}
+.btn.dan{color:var(--err)}
+.btn:disabled{opacity:.4;cursor:default}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.chip{display:inline-flex;align-items:center;font-family:var(--mono);font-size:12px;background:var(--panel2);border:1px solid var(--line);padding:2px 8px;border-radius:20px;color:var(--dim)}
+.kpis{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:10px}
+.kpi{background:var(--panel2);border-radius:8px;padding:10px 12px}
+.kpi small{color:var(--faint);font-size:11px;text-transform:uppercase;letter-spacing:.6px}
+.kpi div{font-size:20px;font-variant-numeric:tabular-nums;margin-top:2px}
+.log{flex:1;min-height:320px;max-height:60vh;overflow:auto;background:#07090b;border:1px solid var(--line);border-radius:8px;
+  padding:10px 12px;font:12px/1.55 var(--mono);color:#b8c0c9;white-space:pre-wrap;word-break:break-all}
+.log .sys{color:var(--accent)}
+.log .e{color:var(--err)}
+.log .w{color:var(--warn)}
+.empty{color:var(--faint);text-align:center;padding:60px 0}
+.form{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:12px;align-items:end}
+label{display:flex;flex-direction:column;gap:5px;color:var(--dim);font-size:12px}
+input,select,textarea{background:var(--panel2);border:1px solid var(--line);border-radius:8px;padding:7px 10px;outline:none}
+input:focus,select:focus,textarea:focus{border-color:var(--accent)}
+textarea{font:13px/1.5 var(--mono);resize:vertical}
+#cfg{width:100%;min-height:65vh;tab-size:2}
+table{width:100%;border-collapse:collapse;font-variant-numeric:tabular-nums}
+th,td{text-align:left;padding:8px 10px;border-bottom:1px solid var(--line);font-size:13px}
+th{color:var(--faint);font-weight:500;font-size:11px;text-transform:uppercase;letter-spacing:.6px}
+tr.click{cursor:pointer} tr.click:hover td{background:var(--panel2)}
+.ppl{font-size:15px;color:var(--accent)}
+.msg{font-size:13px;min-height:1.4em}
+.msg.err{color:var(--err)} .msg.ok{color:var(--ok)}
+.hide{display:none!important}
+.row{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+</style>
+</head>
+<body>
+<header>
+  <div class="brand"><i></i>NInfer Console</div>
+  <nav>
+    <button data-tab="models" class="on">Modelli</button>
+    <button data-tab="ppl">Perplexity</button>
+    <button data-tab="config">Config</button>
+  </nav>
+  <div class="stats" id="stats"></div>
+</header>
+
+<main>
+  <section id="tab-models" class="grid">
+    <div class="card list" id="models"></div>
+    <div class="card detail" id="detail"><div class="empty">Seleziona un modello</div></div>
+  </section>
+
+  <section id="tab-ppl" class="hide" style="display:flex;flex-direction:column;gap:20px">
+    <div class="card detail" style="min-height:0">
+      <div class="form">
+        <label>Modello<select id="p-model"></select></label>
+        <label>Corpus<select id="p-mode">
+          <option value="quick">ppl-1m quick (4 stream)</option>
+          <option value="full">ppl-1m completo (16 stream)</option>
+          <option value="text">Testo personalizzato</option>
+        </select></label>
+        <label>Context<input id="p-ctx" type="number" min="2" placeholder="4096"></label>
+        <label>Stride<input id="p-stride" type="number" min="1" placeholder="2048"></label>
+        <label>KV dtype<select id="p-kv">
+          <option value="">default (fp8)</option><option>bf16</option><option>int8</option>
+          <option>fp8</option><option>nvfp4</option><option>k8v4</option>
+        </select></label>
+        <div class="row"><button class="btn pri" id="p-run">Avvia</button><button class="btn dan hide" id="p-cancel">Annulla</button></div>
+      </div>
+      <textarea id="p-text" class="hide" rows="6" placeholder="Incolla qui il testo UTF-8 da valutare"></textarea>
+      <div class="msg" id="p-msg"></div>
+      <div class="log" id="p-log" style="min-height:220px"></div>
+    </div>
+    <div class="card" style="padding:8px 10px">
+      <table><thead><tr><th>#</th><th>Modello</th><th>Parametri</th><th>Stato</th><th>Durata</th><th>PPL</th><th>Domini</th></tr></thead>
+      <tbody id="p-jobs"></tbody></table>
+    </div>
+  </section>
+
+  <section id="tab-config" class="hide">
+    <div class="card detail">
+      <div class="row">
+        <div class="msg" id="c-msg" style="flex:1">I modelli in esecuzione non vengono riavviati: scarica e ricarica per applicare nuovi argomenti.</div>
+        <button class="btn" id="c-reload">Ricarica</button>
+        <button class="btn pri" id="c-save">Salva</button>
+      </div>
+      <textarea id="cfg" spellcheck="false"></textarea>
+    </div>
+  </section>
+</main>
+
+<script>
+const $ = s => document.querySelector(s);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const gb = b => (b / 2**30).toFixed(1) + " GB";
+const dur = s => s < 60 ? Math.round(s) + "s" : s < 3600 ? Math.floor(s/60) + "m " + Math.round(s%60) + "s" : Math.floor(s/3600) + "h " + Math.floor(s%3600/60) + "m";
+async function api(path, opt = {}) {
+  const r = await fetch(path, opt);
+  const t = await r.text();
+  let j; try { j = JSON.parse(t) } catch { j = t }
+  if (!r.ok) throw new Error(j?.error?.message || t);
+  return j;
+}
+
+let tab = "models", models = [], sel = localStorage.getItem("sel"), logSeq = 0, logFor = null, jobLog = {id: 0, seq: 0};
+
+// ---- tabs
+document.querySelectorAll("nav button").forEach(b => b.onclick = () => {
+  tab = b.dataset.tab;
+  document.querySelectorAll("nav button").forEach(x => x.classList.toggle("on", x === b));
+  ["models","ppl","config"].forEach(t => $("#tab-" + t).classList.toggle("hide", t !== tab));
+  if (tab === "config") loadCfg();
+  tick();
+});
+
+// ---- host stats
+function statBox(label, value, pct) {
+  return `<div class="stat"><small>${label}</small><b>${value}</b>${pct == null ? "" : `<div class="bar"><span style="width:${Math.min(100, pct)}%"></span></div>`}</div>`;
+}
+async function stats() {
+  const s = await api("/api/stats");
+  let h = "";
+  if (s.cpu != null) h += statBox("CPU", s.cpu.toFixed(0) + "%", s.cpu);
+  if (s.mem_total) h += statBox("RAM", `${gb(s.mem_used)} / ${gb(s.mem_total)}`, 100 * s.mem_used / s.mem_total);
+  (s.gpus || []).forEach((g, i) => {
+    const p = (s.gpus.length > 1 ? "GPU" + i : "GPU");
+    h += statBox(p, g.util + "%", g.util);
+    h += statBox("VRAM", `${gb(g.mem_used)} / ${gb(g.mem_total)}`, 100 * g.mem_used / g.mem_total);
+    h += statBox("Temp · W", `${g.temp}°C · ${Math.round(g.power)}W`, 100 * g.power / (g.power_limit || 300));
+  });
+  if (s.load) h += statBox("Load", s.load);
+  $("#stats").innerHTML = h;
+}
+
+// ---- models
+function renderList() {
+  $("#models").innerHTML = models.length ? models.map(m => `
+    <div class="model ${m.id === sel ? "sel" : ""}" data-id="${esc(m.id)}">
+      <span class="dot ${m.state}"></span>
+      <div class="n"><div>${esc(m.id)}</div><small>${[m.missing ? "⚠ file mancante" : m.size ? gb(m.size) : "", (m.state === "ready" || m.state === "loading") && ":" + m.port].filter(Boolean).join(" · ")}</small></div>
+    </div>`).join("") : `<div class="empty">Nessun modello in config.yaml</div>`;
+  document.querySelectorAll(".model").forEach(e => e.onclick = () => { sel = e.dataset.id; localStorage.setItem("sel", sel); renderList(); renderDetail(); });
+  const opts = models.map(m => `<option>${esc(m.id)}</option>`).join("");
+  if ($("#p-model").dataset.opts !== opts) { const v = $("#p-model").value; $("#p-model").innerHTML = opts; $("#p-model").dataset.opts = opts; if (v) $("#p-model").value = v; }
+}
+
+const stateLabel = {ready: "Pronto", loading: "Caricamento…", stopping: "Arresto…", stopped: "Spento", failed: "Errore"};
+function renderDetail() {
+  const m = models.find(x => x.id === sel);
+  if (!m) { $("#detail").innerHTML = `<div class="empty">Seleziona un modello</div>`; logFor = null; return; }
+  const busy = m.state === "loading" || m.state === "stopping";
+  const up = m.state === "ready" || m.state === "loading";
+  if (logFor !== m.id) {
+    logFor = m.id; logSeq = 0;
+    $("#detail").innerHTML = `
+      <div class="head">
+        <div><h2>${esc(m.id)}</h2><div class="meta">${esc(m.path)}</div></div>
+        <div class="act"><span id="d-state" class="chip"></span><button class="btn" id="d-btn"></button></div>
+      </div>
+      ${m.description ? `<div style="color:var(--dim)">${esc(m.description)}</div>` : ""}
+      <div class="chips">${(m.args || []).map(a => `<span class="chip">${esc(a)}</span>`).join("")}</div>
+      <div class="kpis" id="d-kpis"></div>
+      <div class="log" id="d-log"></div>`;
+  }
+  $("#d-state").innerHTML = `<span class="dot ${m.state}" style="display:inline-block;margin-right:6px"></span>${stateLabel[m.state] || m.state}${m.uptime ? " · " + dur(m.uptime) : ""}`;
+  const b = $("#d-btn");
+  b.textContent = up ? "Scarica" : "Carica";
+  b.className = "btn " + (up ? "dan" : "pri");
+  b.disabled = busy && m.state === "stopping";
+  b.onclick = async () => {
+    b.disabled = true;
+    try { await api(`/api/models/${encodeURIComponent(m.id)}/${up ? "unload" : "load"}`, {method: "POST"}); }
+    catch (e) { alert(e.message); }
+    tick();
+  };
+}
+
+function colorLine(l) {
+  const c = l.startsWith("===") ? "sys" : /\b(error|fatal|failed|exception)\b/i.test(l) ? "e" : /\bwarn/i.test(l) ? "w" : "";
+  return c ? `<span class="${c}">${esc(l)}</span>` : esc(l);
+}
+async function pullLog(el, q, seq) {
+  const r = await api(`/api/logs?${q}&since=${seq}`);
+  if (r.lines.length) {
+    const stick = el.scrollTop + el.clientHeight >= el.scrollHeight - 30;
+    el.insertAdjacentHTML("beforeend", r.lines.map(colorLine).join("\n") + "\n");
+    while (el.childNodes.length > 6000) el.firstChild.remove();
+    if (stick) el.scrollTop = el.scrollHeight;
+  }
+  return r.next;
+}
+
+async function modelKpis(m) {
+  const el = $("#d-kpis");
+  if (!el) return;
+  if (m.state !== "ready") { el.innerHTML = ""; return; }
+  const x = await api(`/api/models/${encodeURIComponent(m.id)}/metrics`);
+  const k = (label, v) => `<div class="kpi"><small>${label}</small><div>${v}</div></div>`;
+  const f = (n, d = 1) => n == null ? "–" : (+n).toFixed(d);
+  const acc = x.ninfer_last_draft_tokens ? (100 * x.ninfer_last_draft_accepted_tokens / x.ninfer_last_draft_tokens).toFixed(0) + "%" : "–";
+  el.innerHTML = k("Decode tok/s", f(x.ninfer_last_tokens_per_second)) + k("Prefill tok/s", f(x.ninfer_last_prompt_per_second, 0))
+    + k("Richieste attive", f(x.ninfer_running_requests, 0)) + k("Completate", f(x.ninfer_requests_completed_total, 0))
+    + k("Draft accettati", acc) + k("Ultimo prompt", f(x.ninfer_last_prompt_tokens, 0) + " tok");
+}
+
+async function refreshModels() {
+  models = await api("/api/models");
+  renderList();
+  renderDetail();
+  const m = models.find(x => x.id === sel);
+  if (m) {
+    const id = m.id;
+    const next = await pullLog($("#d-log"), "model=" + encodeURIComponent(id), logSeq);
+    if (logFor === id) logSeq = next;
+    modelKpis(m).catch(() => {});
+  }
+}
+
+// ---- perplexity
+$("#p-mode").onchange = () => $("#p-text").classList.toggle("hide", $("#p-mode").value !== "text");
+$("#p-run").onclick = async () => {
+  $("#p-msg").className = "msg"; $("#p-msg").textContent = "";
+  const running = models.filter(m => m.state === "ready" || m.state === "loading");
+  if (running.length && !confirm("Il test usa la GPU: i modelli caricati (" + running.map(m => m.id).join(", ") + ") verranno scaricati. Continuare?")) return;
+  try {
+    const j = await api("/api/ppl", {method: "POST", body: JSON.stringify({
+      model: $("#p-model").value, mode: $("#p-mode").value, text: $("#p-text").value,
+      context: +$("#p-ctx").value || 0, stride: +$("#p-stride").value || 0, kv: $("#p-kv").value})});
+    jobLog = {id: j.id, seq: 0}; $("#p-log").innerHTML = "";
+  } catch (e) { $("#p-msg").className = "msg err"; $("#p-msg").textContent = e.message; }
+  tick();
+};
+$("#p-cancel").onclick = () => api("/api/ppl?cancel=1", {method: "POST", body: "{}"}).then(tick);
+
+async function refreshPpl() {
+  const jobs = await api("/api/ppl");
+  const running = jobs.some(j => j.state === "running");
+  $("#p-run").disabled = running; $("#p-cancel").classList.toggle("hide", !running);
+  if (!jobLog.id && jobs.length) jobLog = {id: jobs[jobs.length - 1].id, seq: 0};
+  $("#p-jobs").innerHTML = jobs.slice().reverse().map(j => {
+    const p = j.params || {};
+    const desc = [p.mode || "quick", p.context && "ctx " + p.context, p.stride && "stride " + p.stride, p.kv && "kv " + p.kv].filter(Boolean).join(" · ");
+    const doms = Object.entries(j.domains || {}).map(([d, v]) => `${esc(d)} ${v.toFixed(3)}`).join(" · ");
+    const secs = j.state === "running" ? (Date.now() - Date.parse(j.started)) / 1000 : j.seconds;
+    return `<tr class="click" data-id="${j.id}"><td>${j.id}</td><td>${esc(j.model)}</td><td>${esc(desc)}</td>
+      <td><span class="dot ${j.state === "done" ? "ready" : j.state === "running" ? "loading" : "failed"}" style="display:inline-block;margin-right:6px"></span>${esc(j.state)}${j.error ? " – " + esc(j.error) : ""}</td>
+      <td>${dur(secs)}</td><td class="ppl">${j.ppl ? j.ppl.toFixed(4) : "–"}</td><td style="color:var(--dim);font-size:12px">${doms}</td></tr>`;
+  }).join("") || `<tr><td colspan="7" class="empty" style="padding:24px">Nessun test eseguito</td></tr>`;
+  document.querySelectorAll("#p-jobs tr.click").forEach(r => r.onclick = () => { jobLog = {id: +r.dataset.id, seq: 0}; $("#p-log").innerHTML = ""; tick(); });
+  if (jobLog.id) { const id = jobLog.id; const n = await pullLog($("#p-log"), "job=" + id, jobLog.seq); if (jobLog.id === id) jobLog.seq = n; }
+}
+
+// ---- config
+async function loadCfg() {
+  $("#cfg").value = await api("/api/config");
+  $("#c-msg").className = "msg";
+}
+$("#c-reload").onclick = loadCfg;
+$("#c-save").onclick = async () => {
+  try {
+    await api("/api/config", {method: "PUT", body: $("#cfg").value});
+    $("#c-msg").className = "msg ok"; $("#c-msg").textContent = "Salvato. Le nuove impostazioni valgono dal prossimo caricamento.";
+    tick();
+  } catch (e) { $("#c-msg").className = "msg err"; $("#c-msg").textContent = e.message; }
+};
+$("#cfg").addEventListener("keydown", e => {
+  if (e.key === "Tab") { e.preventDefault(); document.execCommand("insertText", false, "  "); }
+  if ((e.ctrlKey || e.metaKey) && e.key === "s") { e.preventDefault(); $("#c-save").click(); }
+});
+
+// ---- loop: poll only while the page is visible
+let timer;
+async function tick() {
+  clearTimeout(timer);
+  try {
+    await Promise.all([stats(), tab === "models" ? refreshModels() : tab === "ppl" ? Promise.all([refreshPpl(), api("/api/models").then(m => { models = m; renderList(); })]) : null]);
+  } catch (e) { console.warn(e); }
+  if (!document.hidden) timer = setTimeout(tick, 1500);
+}
+document.addEventListener("visibilitychange", () => { if (!document.hidden) tick(); });
+tick();
+</script>
+</body>
+</html>
