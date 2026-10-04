@@ -411,6 +411,50 @@ func (s *Server) handleModelMetrics(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, 200, parseProm(string(body)))
 }
 
+// readyModel returns the most recently started ready model (the only one in exclusive mode). Caller holds s.mu.
+func (s *Server) readyModel() (string, int) {
+	id, port, at := "", 0, time.Time{}
+	for k, p := range s.procs {
+		if p.State == "ready" && p.Started.After(at) {
+			id, port, at = k, p.Port, p.Started
+		}
+	}
+	return id, port
+}
+
+// handleHealth mirrors ninfer-serve's /health for clients that treat the proxy as one server:
+// 200 while a model is ready, 503 otherwise (it is loaded on the next request).
+func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	id, _ := s.readyModel()
+	s.mu.Unlock()
+	if id == "" {
+		writeJSON(w, 503, map[string]string{"status": "no model loaded"})
+		return
+	}
+	writeJSON(w, 200, map[string]string{"status": "ok", "model": id})
+}
+
+// handleMetrics passes through the Prometheus /metrics of the ready model.
+func (s *Server) handleMetrics(w http.ResponseWriter, r *http.Request) {
+	s.mu.Lock()
+	id, port := s.readyModel()
+	s.mu.Unlock()
+	if id == "" {
+		apiErr(w, 503, errors.New("no model loaded"))
+		return
+	}
+	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/metrics", port))
+	if err != nil {
+		apiErr(w, 502, err)
+		return
+	}
+	defer resp.Body.Close()
+	w.Header().Set("Content-Type", resp.Header.Get("Content-Type"))
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
+}
+
 func parseProm(text string) map[string]float64 {
 	out := map[string]float64{}
 	for _, line := range strings.Split(text, "\n") {
@@ -605,7 +649,7 @@ func (s *Server) authed(r *http.Request) bool {
 	return subtle.ConstantTimeCompare([]byte(got), []byte(key)) == 1
 }
 
-// guard enforces the API key on the console API and /v1/*, and the CORS policy on /v1/*.
+// guard enforces the API key on the console API, /metrics and /v1/*, and the CORS policy on /v1/*.
 func (s *Server) guard(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if strings.HasPrefix(r.URL.Path, "/v1/") {
@@ -623,7 +667,8 @@ func (s *Server) guard(next http.Handler) http.Handler {
 				}
 			}
 		}
-		if (strings.HasPrefix(r.URL.Path, "/v1/") || strings.HasPrefix(r.URL.Path, "/api/")) && !s.authed(r) {
+		// /health stays open, as in ninfer-serve
+		if (strings.HasPrefix(r.URL.Path, "/v1/") || strings.HasPrefix(r.URL.Path, "/api/") || r.URL.Path == "/metrics") && !s.authed(r) {
 			writeJSON(w, 401, map[string]any{"error": map[string]string{"message": "invalid or missing API key", "type": "authentication_error"}})
 			return
 		}
@@ -842,6 +887,8 @@ func main() {
 	mux.HandleFunc("/api/ppl", s.handlePpl)
 	mux.HandleFunc("/api/settings", s.handleSettings)
 	mux.HandleFunc("/v1/", s.handleOpenAI)
+	mux.HandleFunc("GET /health", s.handleHealth)
+	mux.HandleFunc("GET /metrics", s.handleMetrics)
 
 	// Stop children on SIGTERM/SIGINT so GPU memory is released with the container.
 	go func() {

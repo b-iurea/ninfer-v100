@@ -51,11 +51,15 @@ state() { curl -s $P/api/models | python3 -c "import sys,json;print({m['id']:m['
 curl -sf $P/ | grep -q "Ninfer V100 Turbo" || fail "UI served"
 curl -s $P/v1/models | grep -q '"id":"b"' || fail "/v1/models lists config"
 
+[ "$(curl -s -o /dev/null -w '%{http_code}' $P/health)" = 503 ] || fail "/health 503 with no model loaded"
+
 # on-demand load + streaming proxy routed by "model"
 r=$(curl -sN $P/v1/chat/completions -d '{"model":"a","stream":true}')
 grep -q '"served_by": "a"' <<<"$r" || fail "request routed to a (auto-load)"
 [ "$(state a)" = ready ] || fail "a ready"
 curl -s "$P/api/models/a/metrics" | grep -q 42.5 || fail "model metrics"
+curl -sf $P/health | grep -q '"model":"a"' || fail "/health ready with a"
+curl -sf $P/metrics | grep -q "ninfer_last_tokens_per_second 42.5" || fail "/metrics passes through"
 curl -s "$P/api/logs?model=a&since=0" | grep -q -- "--kv-dtype int8" || fail "logs captured with args"
 
 # exclusive: loading b unloads a, b uses its fixed port
@@ -90,6 +94,8 @@ grep -q "a: {path:" config.yaml || fail "settings kept models"
 curl -sf -H 'Authorization: Bearer s3cret' $P/v1/models | grep -q '"id":"a"' || fail "bearer accepted"
 curl -sf -H 'x-api-key: s3cret' $P/api/settings | grep -q '"load_timeout":120' || fail "x-api-key accepted"
 curl -sf $P/ >/dev/null || fail "UI page stays public"
+[ "$(curl -s -o /dev/null -w '%{http_code}' $P/metrics)" = 401 ] || fail "/metrics needs key"
+[ "$(curl -s -o /dev/null -w '%{http_code}' $P/health)" != 401 ] || fail "/health stays open"
 curl -s -D - -o /dev/null -X OPTIONS $P/v1/chat/completions | grep -qi "access-control-allow-origin: \*" || fail "CORS preflight"
 code=$(curl -s -o /dev/null -w '%{http_code}' -H 'x-api-key: s3cret' -X PUT $P/api/settings -d '{"port_start":0}')
 [ "$code" = 400 ] || fail "invalid setting rejected"
