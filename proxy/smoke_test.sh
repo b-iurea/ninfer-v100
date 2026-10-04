@@ -17,6 +17,7 @@ class H(http.server.BaseHTTPRequestHandler):
         self.send_response(200); self.send_header("Content-Type", ctype); self.end_headers(); self.wfile.write(body.encode())
     def do_GET(self):
         if self.path == "/metrics": self.send("# HELP x\nninfer_last_tokens_per_second 42.5\nninfer_running_requests 0\n", "text/plain")
+        elif self.path == "/v1/models": self.send(json.dumps({"data": [{"id": mid, "owned_by": "ninfer", "max_model_len": 4242, "meta": {"ninfer": {"reasoning": {"levels": ["low"]}}}}]}))
         else: self.send('{"status":"ok"}')
     def do_POST(self):
         req = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
@@ -50,6 +51,7 @@ state() { curl -s $P/api/models | python3 -c "import sys,json;print({m['id']:m['
 
 curl -sf $P/ | grep -q "Ninfer V100 Turbo" || fail "UI served"
 curl -s $P/v1/models | grep -q '"id":"b"' || fail "/v1/models lists config"
+curl -s $P/v1/models | grep -q '"max_model_len":8192' || fail "/v1/models max_model_len defaults before a load"
 
 [ "$(curl -s -o /dev/null -w '%{http_code}' $P/health)" = 503 ] || fail "/health 503 with no model loaded"
 
@@ -60,12 +62,15 @@ grep -q '"served_by": "a"' <<<"$r" || fail "request routed to a (auto-load)"
 curl -s "$P/api/models/a/metrics" | grep -q 42.5 || fail "model metrics"
 curl -sf $P/health | grep -q '"model":"a"' || fail "/health ready with a"
 curl -sf $P/metrics | grep -q "ninfer_last_tokens_per_second 42.5" || fail "/metrics passes through"
+caps() { curl -s $P/v1/models | python3 -c "import sys,json;m={m['id']:m for m in json.load(sys.stdin)['data']}['$1'];print(m['max_model_len'],m['meta']['state'],m['meta'].get('ninfer',{}).get('reasoning',{}).get('levels'))"; }
+[ "$(caps a)" = "4242 ready ['low']" ] || fail "/v1/models republishes the model's own entry: $(caps a)"
 curl -s "$P/api/logs?model=a&since=0" | grep -q -- "--kv-dtype int8" || fail "logs captured with args"
 
 # exclusive: loading b unloads a, b uses its fixed port
 r=$(curl -sN $P/v1/chat/completions -d '{"model":"b"}')
 grep -q '"served_by": "b"' <<<"$r" || fail "routed to b"
 [ "$(state a)" = stopped ] || fail "exclusive swap stopped a"
+[ "$(caps a)" = "4242 stopped ['low']" ] || fail "capabilities kept after unload: $(caps a)"
 curl -s $P/api/models | grep -q '"port":19200' || fail "fixed port honored"
 curl -s -o /dev/null -w '%{http_code}' $P/v1/chat/completions -d '{"model":"zzz"}' | grep -q 404 || fail "unknown model 404"
 

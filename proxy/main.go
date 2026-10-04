@@ -19,6 +19,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"reflect"
 	"sort"
 	"strconv"
 	"strings"
@@ -154,6 +155,7 @@ type Server struct {
 	logs    map[string]*Log // per model, survives restarts
 	jobs    []*PplJob
 	cpuPrev [2]uint64
+	caps    map[string]map[string]any // per model: its ninfer-serve /v1/models entry, kept from the last load
 }
 
 func (s *Server) modelLog(id string) *Log {
@@ -245,12 +247,47 @@ func (s *Server) load(id string) (*Proc, error) {
 						fmt.Fprintf(lg, "=== ready on :%d after %s\n", port, time.Since(p.Started).Round(time.Second))
 					}
 					s.mu.Unlock()
+					s.fetchCaps(id, port)
 					return
 				}
 			}
 		}
 	}()
 	return p, nil
+}
+
+// fetchCaps keeps the model's own /v1/models entry (max_model_len, reasoning levels, input modalities),
+// so /v1/models can publish it while the model is unloaded too.
+func (s *Server) fetchCaps(id string, port int) {
+	resp, err := http.Get(fmt.Sprintf("http://127.0.0.1:%d/v1/models", port))
+	if err != nil {
+		return
+	}
+	defer resp.Body.Close()
+	var list struct {
+		Data []map[string]any `json:"data"`
+	}
+	if json.NewDecoder(resp.Body).Decode(&list) != nil || len(list.Data) == 0 {
+		return
+	}
+	s.mu.Lock()
+	s.caps[id] = list.Data[0]
+	s.mu.Unlock()
+}
+
+// maxContext is the --max-context of a model's args, else ninfer-serve's default.
+func maxContext(args []string) int {
+	n := 8192
+	for i, a := range args {
+		v, ok := strings.CutPrefix(a, "--max-context=")
+		if !ok && a == "--max-context" && i+1 < len(args) {
+			v, ok = args[i+1], true
+		}
+		if x, err := strconv.Atoi(v); ok && err == nil {
+			n = x
+		}
+	}
+	return n
 }
 
 // stop signals the process group and waits for exit. Caller holds s.mu; it is released while waiting.
@@ -561,6 +598,11 @@ func (s *Server) save(body []byte) (int, error) {
 			delete(s.procs, id)
 		}
 	}
+	for id := range s.caps {
+		if !reflect.DeepEqual(cfg.Models[id], s.cfg.Models[id]) {
+			delete(s.caps, id) // path or args changed: republished from the next load
+		}
+	}
 	if cfg.Listen != s.cfg.Listen {
 		log.Printf("listen change to %s needs a restart", cfg.Listen)
 	}
@@ -807,12 +849,25 @@ func (s *Server) handleOpenAI(w http.ResponseWriter, r *http.Request) {
 	if r.Method == http.MethodGet && r.URL.Path == "/v1/models" {
 		s.mu.Lock()
 		data := []map[string]any{}
-		for id := range s.cfg.Models {
+		for id, m := range s.cfg.Models {
 			state := "stopped"
 			if p := s.procs[id]; p != nil {
 				state = p.State
 			}
-			data = append(data, map[string]any{"id": id, "object": "model", "owned_by": "ninfer", "meta": map[string]any{"state": state}})
+			// the model's own entry once it has been loaded, else what config.yaml tells
+			e := map[string]any{"object": "model", "owned_by": "ninfer", "max_model_len": maxContext(m.Args)}
+			meta := map[string]any{}
+			for k, v := range s.caps[id] {
+				e[k] = v
+			}
+			if old, ok := e["meta"].(map[string]any); ok {
+				for k, v := range old {
+					meta[k] = v
+				}
+			}
+			meta["state"] = state
+			e["id"], e["meta"] = id, meta
+			data = append(data, e)
 		}
 		s.mu.Unlock()
 		sort.Slice(data, func(a, b int) bool { return data[a]["id"].(string) < data[b]["id"].(string) })
@@ -871,7 +926,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("%s: %v", *cfgPath, err)
 	}
-	s := &Server{cfgPath: *cfgPath, cfg: cfg, procs: map[string]*Proc{}, logs: map[string]*Log{}}
+	s := &Server{cfgPath: *cfgPath, cfg: cfg, procs: map[string]*Proc{}, logs: map[string]*Log{}, caps: map[string]map[string]any{}}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
