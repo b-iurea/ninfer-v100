@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"crypto/subtle"
 	_ "embed"
 	"encoding/json"
 	"errors"
@@ -39,21 +40,32 @@ type ModelCfg struct {
 }
 
 type Config struct {
-	Listen      string              `yaml:"listen"`
-	ServeBin    string              `yaml:"serve_bin"`
-	PplBin      string              `yaml:"perplexity_bin"`
-	Corpus      string              `yaml:"corpus"`
-	PortStart   int                 `yaml:"port_start"`
-	Exclusive   bool                `yaml:"exclusive"`
-	LoadTimeout int                 `yaml:"load_timeout"`
-	Models      map[string]ModelCfg `yaml:"models"`
+	Listen      string              `yaml:"listen" json:"listen"`
+	ServeBin    string              `yaml:"serve_bin" json:"serve_bin"`
+	PplBin      string              `yaml:"perplexity_bin" json:"perplexity_bin"`
+	Corpus      string              `yaml:"corpus" json:"corpus"`
+	PortStart   int                 `yaml:"port_start" json:"port_start"`
+	Exclusive   bool                `yaml:"exclusive" json:"exclusive"`
+	LoadTimeout int                 `yaml:"load_timeout" json:"load_timeout"`
+	APIKey      string              `yaml:"api_key" json:"api_key"`
+	CORS        bool                `yaml:"cors" json:"cors"`
+	Models      map[string]ModelCfg `yaml:"models" json:"-"`
 }
+
+// settingKeys are the top-level scalars the Settings tab edits (Config yaml/json names).
+var settingKeys = []string{"listen", "serve_bin", "perplexity_bin", "corpus", "port_start", "exclusive", "load_timeout", "api_key", "cors"}
 
 func parseConfig(data []byte) (*Config, error) {
 	c := &Config{Listen: ":8080", ServeBin: "ninfer-serve", PplBin: "ninfer-perplexity",
 		PortStart: 9100, Exclusive: true, LoadTimeout: 900}
 	if err := yaml.Unmarshal(data, c); err != nil {
 		return nil, err
+	}
+	if c.PortStart < 1 || c.PortStart > 65535 {
+		return nil, fmt.Errorf("port_start %d out of range", c.PortStart)
+	}
+	if c.LoadTimeout < 1 {
+		return nil, errors.New("load_timeout must be positive")
 	}
 	used := map[int]string{}
 	for id, m := range c.Models {
@@ -480,15 +492,22 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		apiErr(w, 400, err)
 		return
 	}
+	if code, err := s.save(body); err != nil {
+		apiErr(w, code, err)
+		return
+	}
+	writeJSON(w, 200, map[string]string{"ok": "saved"})
+}
+
+// save validates, writes and applies a whole config.yaml.
+func (s *Server) save(body []byte) (int, error) {
 	cfg, err := parseConfig(body)
 	if err != nil {
-		apiErr(w, 400, err)
-		return
+		return 400, err
 	}
 	// WriteFile truncates in place, so a single-file docker bind mount keeps working.
 	if err := os.WriteFile(s.cfgPath, body, 0o644); err != nil {
-		apiErr(w, 500, err)
-		return
+		return 500, err
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -502,7 +521,114 @@ func (s *Server) handleConfig(w http.ResponseWriter, r *http.Request) {
 		log.Printf("listen change to %s needs a restart", cfg.Listen)
 	}
 	s.cfg = cfg
+	return 200, nil
+}
+
+// handleSettings reads or patches the top-level scalars of config.yaml, keeping comments and models.
+func (s *Server) handleSettings(w http.ResponseWriter, r *http.Request) {
+	if r.Method == http.MethodGet {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		writeJSON(w, 200, s.cfg)
+		return
+	}
+	var patch map[string]any
+	if err := json.NewDecoder(io.LimitReader(r.Body, 1<<20)).Decode(&patch); err != nil {
+		apiErr(w, 400, err)
+		return
+	}
+	b, err := os.ReadFile(s.cfgPath)
+	if err != nil {
+		apiErr(w, 500, err)
+		return
+	}
+	var doc yaml.Node
+	if err := yaml.Unmarshal(b, &doc); err != nil {
+		apiErr(w, 400, err)
+		return
+	}
+	if len(doc.Content) == 0 {
+		doc = yaml.Node{Kind: yaml.DocumentNode, Content: []*yaml.Node{{Kind: yaml.MappingNode}}}
+	}
+	root := doc.Content[0]
+	for _, k := range settingKeys {
+		v, ok := patch[k]
+		if !ok {
+			continue
+		}
+		if f, isNum := v.(float64); isNum && f == float64(int64(f)) {
+			v = int64(f) // JSON numbers decode as float64; keep integers integral in YAML
+		}
+		var n yaml.Node
+		if err := n.Encode(v); err != nil {
+			apiErr(w, 400, err)
+			return
+		}
+		set := false
+		for i := 0; i+1 < len(root.Content); i += 2 {
+			if root.Content[i].Value == k {
+				n.LineComment = root.Content[i+1].LineComment
+				*root.Content[i+1] = n
+				set = true
+			}
+		}
+		if !set {
+			root.Content = append(root.Content, &yaml.Node{Kind: yaml.ScalarNode, Value: k}, &n)
+		}
+	}
+	var out bytes.Buffer
+	enc := yaml.NewEncoder(&out)
+	enc.SetIndent(2)
+	if err := enc.Encode(&doc); err != nil {
+		apiErr(w, 500, err)
+		return
+	}
+	if code, err := s.save(out.Bytes()); err != nil {
+		apiErr(w, code, err)
+		return
+	}
 	writeJSON(w, 200, map[string]string{"ok": "saved"})
+}
+
+// authed accepts the ninfer-serve convention: "Authorization: Bearer KEY" or "x-api-key: KEY".
+func (s *Server) authed(r *http.Request) bool {
+	s.mu.Lock()
+	key := s.cfg.APIKey
+	s.mu.Unlock()
+	if key == "" {
+		return true
+	}
+	got := r.Header.Get("x-api-key")
+	if b, ok := strings.CutPrefix(r.Header.Get("Authorization"), "Bearer "); ok {
+		got = b
+	}
+	return subtle.ConstantTimeCompare([]byte(got), []byte(key)) == 1
+}
+
+// guard enforces the API key on the console API and /v1/*, and the CORS policy on /v1/*.
+func (s *Server) guard(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/v1/") {
+			s.mu.Lock()
+			cors := s.cfg.CORS
+			s.mu.Unlock()
+			if cors {
+				h := w.Header()
+				h.Set("Access-Control-Allow-Origin", "*")
+				h.Set("Access-Control-Allow-Headers", "*")
+				h.Set("Access-Control-Allow-Methods", "GET, POST, DELETE, OPTIONS")
+				if r.Method == http.MethodOptions { // preflight stays unauthenticated, as in ninfer-serve
+					w.WriteHeader(204)
+					return
+				}
+			}
+		}
+		if (strings.HasPrefix(r.URL.Path, "/v1/") || strings.HasPrefix(r.URL.Path, "/api/")) && !s.authed(r) {
+			writeJSON(w, 401, map[string]any{"error": map[string]string{"message": "invalid or missing API key", "type": "authentication_error"}})
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
 }
 
 func (s *Server) handlePpl(w http.ResponseWriter, r *http.Request) {
@@ -678,6 +804,14 @@ func (s *Server) handleOpenAI(w http.ResponseWriter, r *http.Request) {
 	target, _ := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", port))
 	rp := httputil.NewSingleHostReverseProxy(target)
 	rp.FlushInterval = -1 // stream SSE immediately
+	rp.ModifyResponse = func(resp *http.Response) error {
+		for k := range resp.Header { // the proxy owns CORS; a child started with --cors would duplicate it
+			if strings.HasPrefix(k, "Access-Control-") {
+				resp.Header.Del(k)
+			}
+		}
+		return nil
+	}
 	rp.ServeHTTP(w, r)
 }
 
@@ -706,6 +840,7 @@ func main() {
 	mux.HandleFunc("GET /api/stats", s.handleStats)
 	mux.HandleFunc("/api/config", s.handleConfig)
 	mux.HandleFunc("/api/ppl", s.handlePpl)
+	mux.HandleFunc("/api/settings", s.handleSettings)
 	mux.HandleFunc("/v1/", s.handleOpenAI)
 
 	// Stop children on SIGTERM/SIGINT so GPU memory is released with the container.
@@ -724,5 +859,5 @@ func main() {
 	}()
 
 	log.Printf("ninfer-proxy on %s (%d models, config %s)", cfg.Listen, len(cfg.Models), *cfgPath)
-	log.Fatal(http.ListenAndServe(cfg.Listen, mux))
+	log.Fatal(http.ListenAndServe(cfg.Listen, s.guard(mux)))
 }

@@ -48,7 +48,7 @@ for _ in $(seq 50); do curl -sf $P/api/models >/dev/null && break; sleep 0.1; do
 fail() { echo "FAIL $1"; cat proxy.log; exit 1; }
 state() { curl -s $P/api/models | python3 -c "import sys,json;print({m['id']:m['state'] for m in json.load(sys.stdin)}['$1'])"; }
 
-curl -sf $P/ | grep -q "NInfer Console" || fail "UI served"
+curl -sf $P/ | grep -q "Ninfer V100 Turbo" || fail "UI served"
 curl -s $P/v1/models | grep -q '"id":"b"' || fail "/v1/models lists config"
 
 # on-demand load + streaming proxy routed by "model"
@@ -78,4 +78,19 @@ sed 's/^  b: .*$//' config.yaml > new.yaml
 curl -sf -X PUT $P/api/config --data-binary @new.yaml >/dev/null
 ! curl -s $P/api/models | grep -q '"id":"b"' || fail "config saved, b removed"
 curl -s $P/api/stats | grep -q '"mem_total"' || fail "host stats"
+
+# settings: patch keeps comments and models; api_key then guards /v1 and /api, not the UI page
+echo "load_timeout: 900 # keep me" >> config.yaml
+curl -sf -X PUT $P/api/settings -d '{"load_timeout":120,"cors":true,"api_key":"s3cret"}' >/dev/null || fail "settings saved"
+grep -q "load_timeout: 120 # keep me" config.yaml || fail "settings kept the comment"
+grep -q "a: {path:" config.yaml || fail "settings kept models"
+[ "$(curl -s -o /dev/null -w '%{http_code}' $P/api/models)" = 401 ] || fail "console needs key"
+[ "$(curl -s -o /dev/null -w '%{http_code}' $P/v1/models)" = 401 ] || fail "/v1 needs key"
+[ "$(curl -s -o /dev/null -w '%{http_code}' -H 'Authorization: Bearer nope' $P/v1/models)" = 401 ] || fail "wrong key rejected"
+curl -sf -H 'Authorization: Bearer s3cret' $P/v1/models | grep -q '"id":"a"' || fail "bearer accepted"
+curl -sf -H 'x-api-key: s3cret' $P/api/settings | grep -q '"load_timeout":120' || fail "x-api-key accepted"
+curl -sf $P/ >/dev/null || fail "UI page stays public"
+curl -s -D - -o /dev/null -X OPTIONS $P/v1/chat/completions | grep -qi "access-control-allow-origin: \*" || fail "CORS preflight"
+code=$(curl -s -o /dev/null -w '%{http_code}' -H 'x-api-key: s3cret' -X PUT $P/api/settings -d '{"port_start":0}')
+[ "$code" = 400 ] || fail "invalid setting rejected"
 echo "all checks passed"

@@ -6,6 +6,8 @@ corpus: /opt/ninfer/corpora/perplexity-1m/manifest.json
 port_start: 9100                     # internal ports, never published; models without `port` get the first free port from here
 exclusive: true                      # one GPU: loading a model (or a perplexity run) unloads the others
 load_timeout: 900                    # seconds an API call waits for an on-demand load
+api_key: ""                          # when set: required as "Authorization: Bearer KEY" or "x-api-key: KEY" on /v1/* and the console
+cors: false                          # permissive browser CORS headers on /v1/*
 
 # Each key is the model id clients send in "model". The proxy adds
 # --host 127.0.0.1 --port N --model-id <key>; put any other ninfer-serve flag in args.
